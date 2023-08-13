@@ -24,6 +24,7 @@
  *		2023-08-10v01 - initial try
  *
  * ToDo:
+ *		fix child device deletion/creation
  *		add command "adaptiveLearning"
  *		add command "awayMode"
  */
