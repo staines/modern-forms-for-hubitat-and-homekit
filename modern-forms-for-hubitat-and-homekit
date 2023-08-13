@@ -1,5 +1,5 @@
 /*
- *	Modern Forms Fan and Light Driver for HomeKit
+ *	Modern Forms for Hubitat and HomeKit
  *
  *	Copyright 2023 Chris Staines
  *	Based on code from Robert Morris, Ben Hamilton, 1info, and Hubitat
@@ -58,7 +58,7 @@
  
 metadata {
 	
-	definition(name: "Modern Forms Fan and Light for HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/hubitat-modern-forms-fan-homekit/main/test.groovy") {
+	definition(name: "Modern Forms for Hubitat and HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/modern-forms-for-hubitat-and-homekit/main/modern-forms-for-hubitat-and-homekit") {
 		capability "Initialize"
 		capability "Refresh"
 		//capability "FanControl" - only the child device should reflect fan controls and state
