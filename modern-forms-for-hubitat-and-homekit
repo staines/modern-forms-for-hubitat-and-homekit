@@ -1,5 +1,5 @@
 /*
- *	Modern Forms for Hubitat and HomeKit
+ *	Modern Forms Fan and Light Driver for HomeKit
  *
  *	Copyright 2023 Chris Staines
  *	Based on code from Robert Morris, Ben Hamilton, 1info, and Hubitat
@@ -14,6 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
  *		2023-08-13v04 - homekit idiosyncrasies
  *		2023-08-13v03 - clean up
@@ -21,6 +22,10 @@
  *		2023-08-13v01 - proper child device creation
  *		2023-08-12v01 - returned to 2023-08-11 base, versioning changes, added state updates
  *		2023-08-10v01 - initial try
+ *
+ * ToDo:
+ *		add command "adaptiveLearning"
+ *		add command "awayMode"
  */
 
 /**
@@ -58,7 +63,7 @@
  
 metadata {
 	
-	definition(name: "Modern Forms for Hubitat and HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/modern-forms-for-hubitat-and-homekit/main/modern-forms-for-hubitat-and-homekit") {
+	definition(name: "Modern Forms Fan and Light for HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/hubitat-modern-forms-fan-homekit/main/test.groovy") {
 		capability "Initialize"
 		capability "Refresh"
 		//capability "FanControl" - only the child device should reflect fan controls and state
@@ -659,9 +664,3 @@ void sendEventsForNewState(newState) {
 	}
 	
 }
-
-//change componentSetLevel to account for fan vs light??
-//command "adaptiveLearning"
-//command "awayMode"
-//fan direction command in child??
-//fan speed on component and received from new state
