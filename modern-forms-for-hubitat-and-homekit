@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v07 - state fixes x2
+ *		2023-08-13v07 - state fixes x3
  *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
  *		2023-08-13v04 - homekit idiosyncrasies
@@ -408,7 +408,7 @@ String componentOn(cd) {
 	
 	if (cd.deviceNetworkId.endsWith("-light")) {
 		
-		sendCommandToDevice(["lightOn": true]) { resp ->
+		sendCommandToDevice(["lightOn": true, "lightBrightness": 60]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
