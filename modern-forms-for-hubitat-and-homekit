@@ -556,7 +556,7 @@ String componentSetSpeed(cd, value) {
 	
 		String currentFanSpeed = fanChild.currentValue("presetLevel")
 
-		log.error("presetLevel: {currentFanSpeed}")
+		log.error("presetLevel: ${currentFanSpeed}")
 
 		if (value == "on") {
 
