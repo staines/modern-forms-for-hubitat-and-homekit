@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v10 - further fix states and speeds x3
+ *		2023-08-13v10 - further fix states and speeds x4
  *		2023-08-13v09 - fix child device deletion
  *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
  *		2023-08-13v07 - state fixes x6
@@ -556,9 +556,11 @@ String componentSetSpeed(cd, value) {
 	
 		String currentFanSpeed = fanChild.currentValue("presetLevel")
 
+		log.error("presetLevel: {currentFanSpeed}")
+
 		if (value == "on") {
 
-			if (logsEnabled) log.debug("changing fan speed to ${currentFanSpeed})")
+			if (logsEnabled) log.debug("changing fan speed to ${currentFanSpeed}")
 
 			value = currentFanSpeed
 
@@ -566,7 +568,7 @@ String componentSetSpeed(cd, value) {
 
 		int speedValue = convertFanSpeedToNumber(value)
 
-		if (logsEnabled) log.debug("changing fan speed to ${speedValue})")
+		if (logsEnabled) log.debug("changing fan speed to ${speedValue}")
 		
 		sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue]) { resp ->
 		
