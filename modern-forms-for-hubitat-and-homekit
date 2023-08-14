@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v10 - further fix states and speeds x6
+ *		2023-08-13v10 - further fix states and speeds x7
  *		2023-08-13v09 - fix child device deletion
  *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
  *		2023-08-13v07 - state fixes x6
@@ -412,7 +412,7 @@ String componentOn(cd) {
 		
 		sendCommandToDevice(["lightOn": true, "lightBrightness": lightChild.currentValue("presetLevel")]) { resp ->
 		
-			if (logsEnabled) log.debug("Received response: ${resp.data}")
+			if (logsEnabled) log.debug("Received response for light on: ${resp.data}")
 				
 			sendEventsForNewState(resp.data)
 			
@@ -424,11 +424,16 @@ String componentOn(cd) {
 
 		com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
 
-		sendCommandToDevice(["fanOn": true, "fanSpeed": convertFanSpeedToNumber(fanChild.currentValue("presetLevel"))]) { resp ->
+		int fanSpeedNumber = convertFanSpeedToNumber(fanChild.currentValue("presetLevel"))
+
+		log.error("${fanSpeedNumber}")
+
+		sendCommandToDevice(["fanOn": true, "fanSpeed": 5]) { resp ->
 		
-			if (logsEnabled) log.debug("Received response: ${resp.data}")
+			if (logsEnabled) log.debug("Received response for fan on: ${resp.data}")
 				
 			sendEventsForNewState(resp.data)
+
 		}
 		
 	}
