@@ -561,7 +561,7 @@ String componentSetSpeed(cd, value) {
 
 void componentSetLevel(cd, level, transitionTime = null) {
 // set light level
-	
+	log.debug("${cd} / ${level}")
 	if (logsEnabled) log.debug("componentSetLevel(${cd}, ${level}, ${transitionTime})")
 	
 	if (level == 0) {
