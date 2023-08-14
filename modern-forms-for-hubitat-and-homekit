@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v10 - further fix states and speeds x4
+ *		2023-08-13v10 - further fix states and speeds x5
  *		2023-08-13v09 - fix child device deletion
  *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
  *		2023-08-13v07 - state fixes x6
@@ -440,6 +440,8 @@ String componentOn(cd) {
 		log.error "Unknown child device:  ${cd}"
 	
 	}
+
+	fetchDeviceState()
 	
 }
 
@@ -476,6 +478,8 @@ String componentOff(cd) {
 		log.error "Unknown child device:  ${cd}"
 	
 	}
+
+	fetchDeviceState()
 	
 }
 
@@ -539,6 +543,9 @@ String componentCycleSpeed(cd) {
 		sendEventsForNewState(resp.data)
 	
 	}
+
+	fetchDeviceState()
+
 }
 
 String componentSetSpeed(cd, value) {
@@ -551,18 +558,18 @@ String componentSetSpeed(cd, value) {
 		componentOff(cd)
 	
 	} else {
-	
-		com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
-	
-		String currentFanSpeed = fanChild.currentValue("presetLevel")
-
-		log.error("presetLevel: ${currentFanSpeed}")
 
 		if (value == "on") {
+		
+			com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
+		
+			String presetFanSpeed = fanChild.currentValue("presetLevel")
+	
+			log.error("presetLevel: ${presetFanSpeed}")
 
-			if (logsEnabled) log.debug("changing fan speed to ${currentFanSpeed}")
+			if (logsEnabled) log.debug("changing fan speed to ${presetFanSpeed}")
 
-			value = currentFanSpeed
+			value = presetFanSpeed
 
 		}
 
@@ -579,6 +586,8 @@ String componentSetSpeed(cd, value) {
 		}
 	
 	}
+
+	fetchDeviceState()
 	
 }
 
@@ -606,6 +615,8 @@ void componentSetLevel(cd, level, transitionTime = null) {
 		}
 	
 	}
+
+	fetchDeviceState()
 	
 }
 
