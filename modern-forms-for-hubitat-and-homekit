@@ -459,7 +459,7 @@ String componentOff(cd) {
 	
 	else if (cd.deviceNetworkId.endsWith("-fan")) {
 		
-		sendCommandToDevice(["fanOn": false, "fanSpeed": null]) { resp ->
+		sendCommandToDevice(["fanOn": false]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
