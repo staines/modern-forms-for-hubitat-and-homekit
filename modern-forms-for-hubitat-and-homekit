@@ -14,6 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit
  *		2023-08-13v07 - state fixes x6
  *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
@@ -244,7 +245,7 @@ String convertFanSpeedToEnumerated(fanSpeedNumber) {
 
         case 3:
 		
-            return "medium-low"
+        	return "medium-low"
 
         case 4:
 		
@@ -257,11 +258,15 @@ String convertFanSpeedToEnumerated(fanSpeedNumber) {
         case 6:
 		
             return "high"
+
+		case 0:
+
+			return "off"
 			
 		default:
 		
 			log.error("Unable to enumerate fan speed of ${fanSpeedNumber}")
-		
+
 			return null
 			
     }
@@ -292,6 +297,10 @@ int convertFanSpeedToNumber(fanSpeedEnumeratedValue) {
 		case "high":
 		
 			return 6
+
+		case "off":
+
+			return 0
 			
 		default:
 		
