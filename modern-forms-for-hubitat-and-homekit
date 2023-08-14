@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v07 - state fixes x4
+ *		2023-08-13v07 - state fixes x5
  *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
  *		2023-08-13v04 - homekit idiosyncrasies
@@ -463,7 +463,7 @@ String componentOff(cd) {
 	
 	else if (cd.deviceNetworkId.endsWith("-fan")) {
 		
-		sendCommandToDevice(["fanOn": false, "fanSpeed": 0]) { resp ->
+		sendCommandToDevice(["fanOn": false, "fanSpeed": null]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
