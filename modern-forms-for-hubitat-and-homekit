@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v10 - further fix states and speeds x9
+ *		2023-08-13v10 - further fix states and speeds x10
  *		2023-08-13v09 - fix child device deletion
  *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
  *		2023-08-13v07 - state fixes x6
@@ -422,16 +422,7 @@ String componentOn(cd) {
 	
 	else if (cd.deviceNetworkId.endsWith("-fan")) {
 
-		com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
-
-		string fanSpeedTest = fanChild.currentValue("presetLevel")
-
-		log.error("${fanSpeedTest}")
-		int fanSpeedNumber = convertFanSpeedToNumber(fanChild.currentValue("presetLevel"))
-
-		log.error("${fanSpeedNumber}")
-
-		sendCommandToDevice(["fanOn": true, "fanSpeed": 5]) { resp ->
+		sendCommandToDevice(["fanOn": true]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response for fan on: ${resp.data}")
 				
@@ -642,7 +633,7 @@ void sendEventsForNewState(newState) {
 
 		String fanNewSwitchStatus = newState.fanOn ? "on" : "off"
 
-		fanChild.sendEvent(name: "presetLevel", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} presetLevel was set to ${fanSpeedEnumerated}")
+		fanChild.sendEvent(name: "lastRunningSpeed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} lastRunningSpeed was set to ${fanSpeedEnumerated}")
 
 		if (newState.fanOn) {
 
@@ -657,34 +648,6 @@ void sendEventsForNewState(newState) {
 		fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.DisplayName} was turned ${fanNewSwitchStatus}")
 
 		fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
-		
-		//if (fanSpeedEnumerated) {
-			
-			//if (fanChild.currentValue("speed") != fanSpeedEnumerated) {
-
-				//fanChild.sendEvent(name: "speed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
-
-				//fanChild.sendEvent(name: "presetLevel", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} presetLevel was set to ${fanSpeedEnumerated}")
-				
-			//}
-			
-		//} else {
-			
-			//log.error("Unrecognized fan speed ${newState.fanSpeed}")
-			
-		//}
-		
-		//if (fanChild.currentValue("switch") != fanNewSwitchStatus) {
-			
-			//fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.DisplayName} was turned ${fanNewSwitchStatus}")
-			
-		//}
-		
-		//if (fanChild.currentValue("direction") != newState.fanDirection) {
-			
-			//fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
-			
-		//}
 		
 	} else {
 		
