@@ -14,6 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2023-08-13v11 - clean up, use lastRunningSpeed
  *		2023-08-13v10 - further fix states and speeds x10
  *		2023-08-13v09 - fix child device deletion
  *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
@@ -27,8 +28,7 @@
  *		2023-08-12v01 - returned to 2023-08-11 base, versioning changes, added state updates
  *		2023-08-10v01 - initial try
  *
- * ToDo:
- *		fix child device deletion/creation
+ *	ToDo:
  *		add command "adaptiveLearning"
  *		add command "awayMode"
  *		add command "feedbackToneMute"
