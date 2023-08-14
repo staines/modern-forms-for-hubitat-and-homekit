@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v07 - state fixes x3
+ *		2023-08-13v07 - state fixes x4
  *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
  *		2023-08-13v04 - homekit idiosyncrasies
@@ -28,6 +28,9 @@
  *		fix child device deletion/creation
  *		add command "adaptiveLearning"
  *		add command "awayMode"
+ *		add command "feedbackToneMute"
+ *		add command "wind"
+ *		add attribute "windSpeed"
  */
 
 /**
@@ -407,8 +410,10 @@ String componentOn(cd) {
 	if (logsEnabled) log.debug "componentOn($cd)"
 	
 	if (cd.deviceNetworkId.endsWith("-light")) {
+
+		com.hubitat.app.ChildDeviceWrapper lightChild = getChildDevice("${device.id}-light")
 		
-		sendCommandToDevice(["lightOn": true, "lightBrightness": 60]) { resp ->
+		sendCommandToDevice(["lightOn": true, "lightBrightness": lightChild.currentValue("presetLevel")]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
@@ -419,8 +424,10 @@ String componentOn(cd) {
 	}
 	
 	else if (cd.deviceNetworkId.endsWith("-fan")) {
+
+		com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
 		
-		sendCommandToDevice(["fanOn": true]) { resp ->
+		sendCommandToDevice(["fanOn": true, "fanSpeed": fanChild.currentValue("presetLevel")]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
@@ -456,7 +463,7 @@ String componentOff(cd) {
 	
 	else if (cd.deviceNetworkId.endsWith("-fan")) {
 		
-		sendCommandToDevice(["fanOn": false]) { resp ->
+		sendCommandToDevice(["fanOn": false, "fanSpeed": 0]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
@@ -614,6 +621,8 @@ void sendEventsForNewState(newState) {
 			if (fanChild.currentValue("speed") != fanSpeedEnumerated) {
 
 				fanChild.sendEvent(name: "speed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
+
+				fanChild.sendEvent(name: "presetLevel", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} presetLevel was set to ${fanSpeedEnumerated}")
 				
 			}
 			
@@ -631,7 +640,7 @@ void sendEventsForNewState(newState) {
 		
 		if (fanChild.currentValue("direction") != newState.fanDirection) {
 			
-			fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was changed to ${newState.fanDirection}")
+			fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
 			
 		}
 		
@@ -655,9 +664,9 @@ void sendEventsForNewState(newState) {
 		
 		if (lightChild.currentValue("level") != newState.lightBrightness) {
 			
-			lightChild.sendEvent(name: "level", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} level was changed to ${newState.lightBrightness}%", unit: "%")
+			lightChild.sendEvent(name: "level", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} level was set to ${newState.lightBrightness}%", unit: "%")
 
-			lightChild.sendEvent(name: "presetLevel", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} presetLevel was changed to ${newState.lightBrightness}%", unit: "%")
+			lightChild.sendEvent(name: "presetLevel", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", unit: "%")
 
 		}
 		
