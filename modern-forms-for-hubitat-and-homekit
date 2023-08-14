@@ -14,7 +14,8 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit
+ *		2023-08-13v09 - fix child device deletion
+ *		2023-08-13v08 - change stated fan speed to off if fan is off #becausehomekit x2
  *		2023-08-13v07 - state fixes x6
  *		2023-08-13v06 - additional clean up
  *		2023-08-13v05 - initial launch
@@ -70,26 +71,12 @@
 metadata {
 	
 	definition(name: "Modern Forms Fan and Light for HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/modern-forms-for-hubitat-and-homekit/main/modern-forms-for-hubitat-and-homekit") {
+
 		capability "Initialize"
 		capability "Refresh"
-		//capability "FanControl" - only the child device should reflect fan controls and state
-		//capability "Switch" - only the child device should reflect light controls and state
-
-		//attribute "direction", "enum", ["forward", "reverse"]
-	  
-		//command "componentOn"
-		//command "componentOff"
-		//command "componentRefresh"
-		//command "componentSetLevel"
-		//command "componentSetSpeed"
-		//command "componentCycleSpeed"
-		//command "componentStartLevelChange" - level change parameter on the light is unused
-		//command "componentStopLevelChange" - level change parameter on the light is unused
 
 		command "reboot"
 		command "changeDirection"
-		//command "adaptiveLearning" - next
-		//command "awayMode" - next
 	  
   }
     
@@ -148,7 +135,7 @@ List<String> refresh() {
 
 // variables
 
-String deviceURL() {
+String deviceURI() {
 // set device URL based on ipAddress
 
     return "http://${ipAddress}/mf"
@@ -191,7 +178,7 @@ void reboot() {
 		
 	sendCommandToDeviceWithParams(
 	
-		uri: deviceURL(),
+		uri: deviceURI(),
 		
 		body: ["reboot": true],
 		
@@ -259,11 +246,11 @@ String convertFanSpeedToEnumerated(fanSpeedNumber) {
 		
             return "high"
 
-		case 0:
+	case 0: case null:
 
 			return "off"
 			
-		default:
+	default:
 		
 			log.error("Unable to enumerate fan speed of ${fanSpeedNumber}")
 
@@ -344,7 +331,7 @@ void sendCommandToDevice(jsonBodyMap, callback) {
 // build command to send to device
 	
 	params = [
-		uri: deviceURL(),
+		uri: deviceURI(),
 		body: jsonBodyMap,
 	]
 	
@@ -416,7 +403,7 @@ void createChildDevices() {
 String componentOn(cd) {
 // turn on child device
 	
-	if (logsEnabled) log.debug "componentOn($cd)"
+	if (logsEnabled) log.debug "componentOn(${cd})"
 	
 	if (cd.deviceNetworkId.endsWith("-light")) {
 
@@ -456,7 +443,7 @@ String componentOn(cd) {
 String componentOff(cd) {
 // turn off child device
 	
-	if (logsEnabled) log.debug "componentOff($cd)"
+	if (logsEnabled) log.debug "componentOff(${cd})"
 	
 	if (cd.deviceNetworkId.endsWith("-light")) {
 		
@@ -671,7 +658,7 @@ void sendEventsForNewState(newState) {
 		
 	} else {
 		
-		deleteChildDevice(getChildDevice("${device.id}-fan"))
+		deleteChildDevice(getChildDevice("${device.id}-fan").deviceNetworkId)
 		
 	}
 	
@@ -697,7 +684,7 @@ void sendEventsForNewState(newState) {
 		
 	} else {
 		
-		deleteChildDevice(getChildDevice("${device.id}-light"))
+		deleteChildDevice(getChildDevice("${device.id}-light").deviceNetworkId)
 		
 	}
 	
