@@ -14,6 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2023-08-15v01 - add preference to turn on fan when speed set or light when level set
  *		2023-08-13v11 - clean up, use lastRunningSpeed
  *		2023-08-13v10 - further fix states and speeds x10
  *		2023-08-13v09 - fix child device deletion
@@ -79,20 +80,30 @@ metadata {
 		command "reboot"
 		command "changeDirection"
 	  
-  }
+  	}
     
 	preferences {
 	   
 		input name: "ipAddress", type: "text", title: "Fan IP Address", required: true
+
 		input name: "logsEnabled", type: "bool", title: "Enable Logging", defaultValue: false
-		input name: "pollingInterval", type: "number", title: "Poll Internal in Seconds (Blank to Disable)", defaultValue: 45
+
+		input name: "pollingInterval", type: "number", title: "Polling Interval in Seconds (0 to Disable)", defaultValue: 30
+
+		input description: "To support various scenarios, you can decide to enable or disable the light and fan, which will delete the respective device.  You can also choose whether to turn on the device when setting a new level or speed.", title: "Light and Fan Options", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+
 		input name: "enabledLight", type: "bool", title: "Enable Light", defaultValue: true
+			if (enabledLight) {
+				input name: "lightOnWithSetLevel", type: "bool", title: "Turn On When Level Set (to help with HomeKit idiosyncrasies)", defaultValue: true
+			}
+
 		input name: "enabledFan", type: "bool", title: "Enable Fan", defaultValue: true
 			if (enabledFan) {
 				input name: "fanSpeedLow", type: "number", title: "Fan Speed on Low Setting (1 or 2)", defaultValue: 2, range: 1..2
+				input name: "fanOnWithSetSpeed", type: "bool", title: "Turn On When Speed Set (to help with HomeKit idiosyncrasies)", defaultValue: true
 			}
 		
-   }
+   	}
 	
 }
 
@@ -565,13 +576,23 @@ String componentSetSpeed(cd, value) {
 			int speedValue = convertFanSpeedToNumber(value)
 	
 			if (logsEnabled) log.debug("changing fan speed to ${speedValue}")
+
+			if (fanOnWithSetSpeed) {
 			
-			sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue]) { resp ->
-			
-				if (logsEnabled) log.debug("Received response: ${resp.date}")
-					
-				sendEventsForNewState(resp.data)
+				sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue]) { resp ->
 				
+					if (logsEnabled) log.debug("Received response: ${resp.date}")
+						
+					sendEventsForNewState(resp.data)
+
+			} else {
+
+				sendCommandToDevice(["fanSpeed": speedValue]) { resp ->
+				
+					if (logsEnabled) log.debug("Received response: ${resp.date}")
+						
+					sendEventsForNewState(resp.data)
+
 			}
 
 		}
@@ -592,16 +613,22 @@ void componentSetLevel(cd, level, transitionTime = null) {
 		componentOff(cd)
 		
 	} else {
-	
-	// turn on light before setting level to accommodate homekit's idiosyncrasies
-	
-		componentOn(cd)
+
+		if (lightOnWithSetLevel) {
 		
-		sendCommandToDevice(["lightOn": true, "lightBrightness": level]) { resp ->
+			sendCommandToDevice(["lightOn": true, "lightBrightness": level]) { resp ->
+			
+				if (logsEnabled) log.debug("Received response:  ${resp.data}")
+					
+				sendEventsForNewState(resp.data)
+
+		} else {
 		
-			if (logsEnabled) log.debug("Received response:  ${resp.data}")
-				
-			sendEventsForNewState(resp.data)
+			sendCommandToDevice(["lightBrightness": level]) { resp ->
+			
+				if (logsEnabled) log.debug("Received response:  ${resp.data}")
+					
+				sendEventsForNewState(resp.data)
 			
 		}
 	
