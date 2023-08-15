@@ -1,6 +1,6 @@
 # Modern Forms Fan and Light Driver for HomeKit
 
-A Hubitat driver for Modern Forms fans that works with HomeKit Integration by utilizing child devices.
+A Hubitat driver for Modern Forms fans that works with HomeKit Integration by utilizing child devices.  Based on code from Robert Morris, Ben Hamilton, 1info, and Hubitat.
 
 ## How-To
 
