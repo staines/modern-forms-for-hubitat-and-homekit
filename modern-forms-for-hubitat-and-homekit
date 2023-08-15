@@ -14,6 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2023-08-15v02 - clean up preferences
  *		2023-08-15v01 - add preference to turn on fan when speed set or light when level set
  *		2023-08-13v11 - clean up, use lastRunningSpeed
  *		2023-08-13v10 - further fix states and speeds x10
@@ -84,24 +85,26 @@ metadata {
     
 	preferences {
 	   
-		input name: "ipAddress", type: "text", title: "Fan IP Address", required: true
+		input name: "ipAddress", type: "text", title: "IP address of the fan", required: true
 
-		input name: "logsEnabled", type: "bool", title: "Enable Logging", defaultValue: false
+		input name: "logsEnabled", type: "bool", title: "Enable debug logging", defaultValue: false
 
-		input name: "pollingInterval", type: "number", title: "Polling Interval in Seconds (0 to Disable)", defaultValue: 30
+		input name: "pollingInterval", type: "number", title: "Polling interval in seconds (use 0 to disable)", defaultValue: 30
 
-		input description: "To support various scenarios, you can decide to enable or disable the light and fan, which will delete the respective device.  You can also choose whether to turn on the device when setting a new level or speed.", title: "Light and Fan Options", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+		input description: "To support various scenarios, you can decide to enable or disable the light and fan, which will delete the respective device.  You can also choose whether to turn on the device when setting a new level or speed.", displayDuringSetup: false, type: "paragraph", element: "paragraph"
 
-		input name: "enabledLight", type: "bool", title: "Enable Light", defaultValue: true
+		input name: "enabledLight", type: "bool", title: "Enable light device", defaultValue: true
 			if (enabledLight) {
-				input name: "lightOnWithSetLevel", type: "bool", title: "Turn On When Level Set (to help with HomeKit idiosyncrasies)", defaultValue: true
+				input name: "lightOnWithSetLevel", type: "bool", title: "Turn light on when setting a light level or brightness, which helps with HomeKit idiosyncrasies", defaultValue: true
 			}
 
-		input name: "enabledFan", type: "bool", title: "Enable Fan", defaultValue: true
+		input name: "enabledFan", type: "bool", title: "Enable fan device", defaultValue: true
 			if (enabledFan) {
-				input name: "fanSpeedLow", type: "number", title: "Fan Speed on Low Setting (1 or 2)", defaultValue: 2, range: 1..2
-				input name: "fanOnWithSetSpeed", type: "bool", title: "Turn On When Speed Set (to help with HomeKit idiosyncrasies)", defaultValue: true
+				input name: "fanSpeedLow", type: "number", title: "Modern Forms fan speed to use with Hubitat's low speed setting (1 or 2)", defaultValue: 2, range: 1..2
+				input name: "fanOnWithSetSpeed", type: "bool", title: "Turn fan on when setting a fan speed, which helps with HomeKit idiosyncrasies", defaultValue: true
 			}
+
+		input description: "Note:  The current HomeKit integration sends a lighting level of 100 when turning the light on.", displayDuringSetup: false, type: "paragraph", element: "paragraph"
 		
    	}
 	
