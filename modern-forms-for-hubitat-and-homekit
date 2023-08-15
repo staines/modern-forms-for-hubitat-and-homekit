@@ -14,7 +14,7 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
- *		2023-08-15v02 - clean up preferences
+ *		2023-08-15v02 - clean up preferences (again)
  *		2023-08-15v01 - add preference to turn on fan when speed set or light when level set
  *		2023-08-13v11 - clean up, use lastRunningSpeed
  *		2023-08-13v10 - further fix states and speeds x10
@@ -91,7 +91,7 @@ metadata {
 
 		input name: "pollingInterval", type: "number", title: "Polling interval in seconds (use 0 to disable)", defaultValue: 30
 
-		input description: "To support various scenarios, you can decide to enable or disable the light and fan, which will delete the respective device.  You can also choose whether to turn on the device when setting a new level or speed.", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+		input description: "To support various scenarios, you can decide to enable or disable the light and fan, which will delete the respective device.  You can also choose whether to turn on the device when setting a new level or speed.", title: "Light and fan device options", displayDuringSetup: false, type: "paragraph", element: "paragraph"
 
 		input name: "enabledLight", type: "bool", title: "Enable light device", defaultValue: true
 			if (enabledLight) {
@@ -104,7 +104,9 @@ metadata {
 				input name: "fanOnWithSetSpeed", type: "bool", title: "Turn fan on when setting a fan speed, which helps with HomeKit idiosyncrasies", defaultValue: true
 			}
 
-		input description: "Note:  The current HomeKit integration sends a lighting level of 100 when turning the light on.", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+		input description: "Note:  The current HomeKit integration sends a lighting level of 100 when turning the light on.", title: "HomeKit idiosyncrasy", displayDuringSetup: false, type: "paragraph", element: "paragraph"
+
+		input description: "Note:  Modern Forms fans retain the last used fan speed, but this makes HomeKit think the fan is still on even if the switch is turned off.  To circumvent this, the driver ignores the fan speed from the fan and tells Hubitat the fan speed is off if the switch is off.", title: "HomeKit idiosyncrasy", displayDuringSetup: false, type: "paragraph", element: "paragraph"
 		
    	}
 	
