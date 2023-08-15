@@ -41,17 +41,11 @@
 /**
  *	Considerations / Notes:
  *
- *		requires an IP Address for the device; suggest to
+ *		requires an IP address for the device; suggest to
  *		set a static LAN IP via DHCP on your router for stability
  * 
- *		fanSpeed for Modern Forms has 6 choices while Hubitat has 5, so
+ *		fanSpeed for Modern Forms has 6 choices, while Hubitat has 5.  so
  *		settings allow user to select a default Low speed
- *
- *		some Modern Forms products only have a fan or light, so
- *		settings allow to disable or enable the fan or light function
- *
- *		in a change from Ben Hamilton's driver, the
- *		polling frequency is a default of 45 seconds
  *
  *		example fan response from 1info:
  *			"clientId": "MF_XXXXXXXXXXXX",
