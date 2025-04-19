@@ -37,6 +37,7 @@
  *		add command "feedbackToneMute"
  *		add command "wind"
  *		add attribute "windSpeed"
+ *		add if (enabledLight) in front of light fixture references (do same for fan)
  */
 
 /**
