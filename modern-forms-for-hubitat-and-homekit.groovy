@@ -1,7 +1,7 @@
 /*
  *	Modern Forms Fan and Light Driver for HomeKit
  *
- *	Copyright 2023 Chris Staines
+ *	Copyright 2026 Chris Staines
  *	Based on code from Robert Morris, Ben Hamilton, 1info, and Hubitat
  * 
  *	Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -14,6 +14,11 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2026-02-25v01 - fix bugs: resp.date typo, fanSpeedNumber undefined, DisplayName capitalisation,
+ *		                redundant fetchDeviceState calls, null crash on child device deletion,
+ *		                List<String> return type mismatch, polling chain duplication,
+ *		                presetLevel null fallback, unguarded log.debug, implicit global params,
+ *		                no-op conditional preferences removed; used Claude
  *		2023-08-15v03 - perfect, shiny, and new
  *		2023-08-15v02 - clean up preferences (/shrug)
  *		2023-08-15v01 - add preference to turn on fan when speed set or light when level set
@@ -77,7 +82,7 @@ metadata {
 		command "reboot"
 		command "changeDirection"
 	  
-  	}
+	}
     
 	preferences {
 	   
@@ -88,55 +93,54 @@ metadata {
 		input name: "pollingInterval", type: "number", title: "Polling interval in seconds (or use 0 to disable)", defaultValue: 30
 
 		input name: "enabledLight", type: "bool", title: "Enable light device (disabling deletes the light device)", defaultValue: true
-			if (enabledLight) {
-				input name: "lightOnWithSetLevel", type: "bool", title: "Turn light on when setting a light level or brightness (helps with HomeKit idiosyncrasies)", defaultValue: true
-			}
+
+		input name: "lightOnWithSetLevel", type: "bool", title: "Turn light on when setting a light level or brightness (helps with HomeKit idiosyncrasies)", defaultValue: true
 
 		input name: "enabledFan", type: "bool", title: "Enable fan device (disabling deletes the fan device)", defaultValue: true
-			if (enabledFan) {
-				input name: "fanSpeedLow", type: "number", title: "Modern Forms fan speed to use as Hubitat's low speed setting (1 or 2)", defaultValue: 2, range: 1..2
-				input name: "fanOnWithSetSpeed", type: "bool", title: "Turn fan on when setting a fan speed (helps with HomeKit idiosyncrasies)", defaultValue: true
-			}
+
+		input name: "fanSpeedLow", type: "number", title: "Modern Forms fan speed to use as Hubitat's low speed setting (1 or 2)", defaultValue: 2, range: 1..2
+
+		input name: "fanOnWithSetSpeed", type: "bool", title: "Turn fan on when setting a fan speed (helps with HomeKit idiosyncrasies)", defaultValue: true
 		
-   	}
+	}
 	
 }
 
 // capabilities
 
-List<String> installed() {
+void installed() {
 // setup device after installation
 	
 	if (logsEnabled) log.debug("Installed")
 	
-	return setupDevice()
+	setupDevice()
 	
 }
 
-List<String> updated() {
+void updated() {
 // setup device after update
 	
 	if (logsEnabled) log.debug("Updated")
 	
-	return setupDevice()
+	setupDevice()
 	
 }
 
-List<String> initialize() {
+void initialize() {
 // setup device after initialization
 	
 	if (logsEnabled) log.debug("Initialized")
 	
-	return setupDevice()
+	setupDevice()
 	
 }
 
-List<String> refresh() {
-// refresh device after update
+void refresh() {
+// refresh device
 	
 	if (logsEnabled) log.debug("Refresh")
 	
-	return fetchDeviceState()
+	fetchDeviceState()
 	
 }
 
@@ -145,7 +149,7 @@ List<String> refresh() {
 String deviceURI() {
 // set device URL based on ipAddress
 
-    return "http://${ipAddress}/mf"
+	return "http://${ipAddress}/mf"
 	
 }
 
@@ -155,24 +159,25 @@ void setupDevice() {
 // create child devices, set basic fan speed parameter, obtain initial state, and set polling interval
 
 	if (logsEnabled) log.debug("setupDevice()")
+
+	// Cancel any existing polling chain before starting a new one
+	unschedule('runPoll')
 		
 	try {
 		
 		createChildDevices()
 		
-	}
-	
-	catch (Exception ex) {
+	} catch (Exception ex) {
 		
-		log.warn "Could not create child devices:  ${ex}"
+		log.warn "Could not create child devices: ${ex}"
 		
 	}
 
-    List<String> fanSpeedList = ["low", "medium-low", "medium", "medium-high", "high", "off", "on"]
-		groovy.json.JsonBuilder fanSpeedsJSON = new groovy.json.JsonBuilder(fanSpeedList)
-		sendEvent(name: "supportedFanSpeeds", value: fanSpeedsJSON)
+	List<String> fanSpeedList = ["low", "medium-low", "medium", "medium-high", "high", "off", "on"]
+	groovy.json.JsonBuilder fanSpeedsJSON = new groovy.json.JsonBuilder(fanSpeedList)
+	sendEvent(name: "supportedFanSpeeds", value: fanSpeedsJSON)
 		
-    fetchDeviceState()
+	fetchDeviceState()
 	
 	if (pollingInterval > 0) scheduleNextPoll()
 		
@@ -193,7 +198,7 @@ void reboot() {
 		
 	) { resp ->
 	
-		if (logsEnabled) log.debug("Device not rebooted and unexpected response received:  ${resp.data}")
+		if (logsEnabled) log.debug("Device not rebooted and unexpected response received: ${resp.data}")
 			
 	}
 	
@@ -218,9 +223,9 @@ void changeDirection() {
 	
 	sendCommandToDevice(["fanDirection": newDirection]) { resp ->
 	
-	if (logsEnabled) log.debug("Received response:  ${resp.data}")
-		
-	fetchDeviceState()
+		if (logsEnabled) log.debug("Received response: ${resp.data}")
+			
+		sendEventsForNewState(resp.data)
 	
 	}
 	
@@ -229,46 +234,45 @@ void changeDirection() {
 String convertFanSpeedToEnumerated(fanSpeedNumber) {
 // convert fan speed number from Modern Forms to fan speed enumerated value for Hubitat
 	
-    switch (fanSpeedNumber) {
+	switch (fanSpeedNumber) {
 		
-        case 1: case 2:
+		case 1: case 2:
 		
-		// due to Modern Forms using 6 speeds and Hubitat supporting 5, we consolidate 1 and 2 into "low"
+			// due to Modern Forms using 6 speeds and Hubitat supporting 5, we consolidate 1 and 2 into "low"
+			return "low"
 
-            return "low"
-
-        case 3:
+		case 3:
 		
-        	return "medium-low"
+			return "medium-low"
 
-        case 4:
+		case 4:
 		
-            return "medium"
+			return "medium"
 			
-        case 5:
+		case 5:
 		
-            return "medium-high"
+			return "medium-high"
 			
-        case 6:
+		case 6:
 		
-            return "high"
+			return "high"
 
-	case 0: case null:
+		case 0: case null:
 
 			return "off"
 			
-	default:
+		default:
 		
 			log.error("Unable to enumerate fan speed of ${fanSpeedNumber}")
 
 			return null
 			
-    }
+	}
 	
 }
 
-int convertFanSpeedToNumber(fanSpeedEnumeratedValue) {
-// convert fan speed enumerated value from Hubitat to fan speed number for Hubita
+int convertFanSpeedToNumber(String fanSpeedEnumeratedValue) {
+// convert fan speed enumerated value from Hubitat to fan speed number for Modern Forms
 
 	switch (fanSpeedEnumeratedValue) {
 		
@@ -298,7 +302,8 @@ int convertFanSpeedToNumber(fanSpeedEnumeratedValue) {
 			
 		default:
 		
-			log.error("Unable to convert fan speed of ${fanSpeedNumber} to number")
+			// FIX: was incorrectly referencing undefined variable fanSpeedNumber
+			log.error("Unable to convert fan speed of ${fanSpeedEnumeratedValue} to number")
 
 			return settings.fanSpeedLow
 			
@@ -312,7 +317,10 @@ void scheduleNextPoll() {
 	if (pollingInterval > 0) {
 		
 		if (logsEnabled) log.debug("Scheduling next device state poll for ${pollingInterval} seconds")
-		
+
+		// FIX: unschedule before scheduling to prevent duplicate polling chains
+		// if updated() is called multiple times in quick succession
+		unschedule('runPoll')
 		runIn(pollingInterval, 'runPoll')
 	
 	}
@@ -324,20 +332,21 @@ void runPoll() {
 	
 	if (pollingInterval > 0) {
 		
-			if (logsEnabled) log.debug("Running poll")
-				
-			fetchDeviceState()
+		if (logsEnabled) log.debug("Running poll")
 			
-			scheduleNextPoll()
-			
+		fetchDeviceState()
+		
+		scheduleNextPoll()
+		
 	}
 	
 }
 
-void sendCommandToDevice(jsonBodyMap, callback) {
+void sendCommandToDevice(Map jsonBodyMap, Closure callback) {
 // build command to send to device
 	
-	params = [
+	// FIX: was an implicit global variable (missing type declaration)
+	Map params = [
 		uri: deviceURI(),
 		body: jsonBodyMap,
 	]
@@ -346,7 +355,7 @@ void sendCommandToDevice(jsonBodyMap, callback) {
 	
 }
 
-void sendCommandToDeviceWithParams(params, callback) {
+void sendCommandToDeviceWithParams(Map params, Closure callback) {
 // send command to device
 
 	try {
@@ -385,29 +394,37 @@ void fetchDeviceState() {
 void createChildDevices() {
 // create child light and fan devices if enabled
 	
-   String thisId = device.id
+	String thisId = device.id
    
-   com.hubitat.app.ChildDeviceWrapper lightChild = getChildDevice("${thisId}-light")
+	com.hubitat.app.ChildDeviceWrapper lightChild = getChildDevice("${thisId}-light")
+	com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${thisId}-fan")
    
-   com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${thisId}-fan")
-   
-   if (!lightChild && enabledLight) {
+	if (!lightChild && enabledLight) {
 	   
-      lightChild = addChildDevice("hubitat", "Generic Component Dimmer", "${thisId}-light", [name: "${device.displayName} Light", isComponent: false])
+		lightChild = addChildDevice("hubitat", "Generic Component Dimmer", "${thisId}-light", [name: "${device.displayName} Light", isComponent: false])
 	  
-   }
+	}
    
-   if (!fanChild && enabledFan) {
+	if (!fanChild && enabledFan) {
 	   
-      fanChild = addChildDevice("hubitat", "Generic Component Fan Control", "${thisId}-fan", [name: "${device.displayName} Fan", isComponent: false])
+		fanChild = addChildDevice("hubitat", "Generic Component Fan Control", "${thisId}-fan", [name: "${device.displayName} Fan", isComponent: false])
 	  
-   }  
-   
+	}
+
+	// Delete child devices if their feature has been disabled
+	if (lightChild && !enabledLight) {
+		deleteChildDevice(lightChild.deviceNetworkId)
+	}
+
+	if (fanChild && !enabledFan) {
+		deleteChildDevice(fanChild.deviceNetworkId)
+	}
+	
 }
 
 // component device commands
 
-String componentOn(cd) {
+void componentOn(cd) {
 // turn on child device
 	
 	if (logsEnabled) log.debug "componentOn(${cd})"
@@ -415,8 +432,11 @@ String componentOn(cd) {
 	if (cd.deviceNetworkId.endsWith("-light")) {
 
 		com.hubitat.app.ChildDeviceWrapper lightChild = getChildDevice("${device.id}-light")
+
+		// FIX: guard against null presetLevel (e.g. on first boot before any state fetch)
+		int brightness = (lightChild?.currentValue("presetLevel") ?: 100) as int
 		
-		sendCommandToDevice(["lightOn": true, "lightBrightness": lightChild.currentValue("presetLevel")]) { resp ->
+		sendCommandToDevice(["lightOn": true, "lightBrightness": brightness]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response for light on: ${resp.data}")
 				
@@ -424,9 +444,7 @@ String componentOn(cd) {
 			
 		}
 		
-	}
-	
-	else if (cd.deviceNetworkId.endsWith("-fan")) {
+	} else if (cd.deviceNetworkId.endsWith("-fan")) {
 
 		sendCommandToDevice(["fanOn": true]) { resp ->
 		
@@ -436,19 +454,18 @@ String componentOn(cd) {
 
 		}
 		
-	}
-	
-	else {
+	} else {
 		
-		log.error "Unknown child device:  ${cd}"
+		log.error "Unknown child device: ${cd}"
 	
 	}
 
-	fetchDeviceState()
-	
+	// FIX: removed redundant fetchDeviceState() — the POST response already contains the new state,
+	// which is processed by sendEventsForNewState(resp.data) in the callback above
+
 }
 
-String componentOff(cd) {
+void componentOff(cd) {
 // turn off child device
 	
 	if (logsEnabled) log.debug "componentOff(${cd})"
@@ -463,30 +480,27 @@ String componentOff(cd) {
 			
 		}
 		
-	}
-	
-	else if (cd.deviceNetworkId.endsWith("-fan")) {
+	} else if (cd.deviceNetworkId.endsWith("-fan")) {
 		
 		sendCommandToDevice(["fanOn": false]) { resp ->
 		
 			if (logsEnabled) log.debug("Received response: ${resp.data}")
 				
 			sendEventsForNewState(resp.data)
+
 		}
 		
-	}
-	
-	else {
+	} else {
 		
-		log.error "Unknown child device:  ${cd}"
+		log.error "Unknown child device: ${cd}"
 	
 	}
 
-	fetchDeviceState()
-	
+	// FIX: removed redundant fetchDeviceState()
+
 }
 
-String componentCycleSpeed(cd) {
+void componentCycleSpeed(cd) {
 // cycle fan speed of child device
 	
 	if (logsEnabled) log.debug "componentCycleSpeed($cd)"
@@ -508,33 +522,23 @@ String componentCycleSpeed(cd) {
 	switch (currentFanSpeed) {
 		
 		case "low":
-		
 			newFanSpeed = 3
-			
 			break
 			
 		case "medium-low":
-		
 			newFanSpeed = 4
-			
 			break
 			
 		case "medium":
-		
 			newFanSpeed = 5
-			
 			break
 			
 		case "medium-high":
-		
 			newFanSpeed = 6
-			
 			break
 			
 		case "high":
-		
 			newFanSpeed = settings.fanSpeedLow
-			
 			break
 			
 	}
@@ -547,11 +551,11 @@ String componentCycleSpeed(cd) {
 	
 	}
 
-	fetchDeviceState()
+	// FIX: removed redundant fetchDeviceState()
 
 }
 
-String componentSetSpeed(cd, value) {
+void componentSetSpeed(cd, value) {
 // set fan speed of child device
 
 	if (logsEnabled) log.debug("componentSetSpeed(${cd}, ${value})")
@@ -560,51 +564,50 @@ String componentSetSpeed(cd, value) {
 		
 		componentOff(cd)
 	
+	} else if (value == "on") {
+
+		componentOn(cd)
+		
 	} else {
 
-		if (value == "on") {
+		int speedValue = convertFanSpeedToNumber(value)
 
-			componentOn(cd)
+		if (logsEnabled) log.debug("changing fan speed to ${speedValue}")
+
+		if (fanOnWithSetSpeed) {
 		
+			sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue]) { resp ->
+			
+				// FIX: was resp.date (typo) — silently discarded state updates
+				if (logsEnabled) log.debug("Received response: ${resp.data}")
+					
+				sendEventsForNewState(resp.data)
+
+			}
+
 		} else {
 
-			int speedValue = convertFanSpeedToNumber(value)
-	
-			if (logsEnabled) log.debug("changing fan speed to ${speedValue}")
-
-			if (fanOnWithSetSpeed) {
+			sendCommandToDevice(["fanSpeed": speedValue]) { resp ->
 			
-				sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue]) { resp ->
-				
-					if (logsEnabled) log.debug("Received response: ${resp.date}")
-						
-					sendEventsForNewState(resp.data)
-
-				}
-
-			} else {
-
-				sendCommandToDevice(["fanSpeed": speedValue]) { resp ->
-				
-					if (logsEnabled) log.debug("Received response: ${resp.date}")
-						
-					sendEventsForNewState(resp.data)
-
-				}
+				// FIX: was resp.date (typo) — silently discarded state updates
+				if (logsEnabled) log.debug("Received response: ${resp.data}")
+					
+				sendEventsForNewState(resp.data)
 
 			}
 
 		}
-	
+
 	}
 
-	fetchDeviceState()
+	// FIX: removed redundant fetchDeviceState()
 	
 }
 
 void componentSetLevel(cd, level, transitionTime = null) {
 // set light level
-	log.debug("${cd} / ${level}")
+
+	// FIX: removed unguarded log.debug that always fired regardless of logsEnabled
 	if (logsEnabled) log.debug("componentSetLevel(${cd}, ${level}, ${transitionTime})")
 	
 	if (level == 0) {
@@ -617,7 +620,7 @@ void componentSetLevel(cd, level, transitionTime = null) {
 		
 			sendCommandToDevice(["lightOn": true, "lightBrightness": level]) { resp ->
 			
-				if (logsEnabled) log.debug("Received response:  ${resp.data}")
+				if (logsEnabled) log.debug("Received response: ${resp.data}")
 					
 				sendEventsForNewState(resp.data)
 
@@ -627,7 +630,7 @@ void componentSetLevel(cd, level, transitionTime = null) {
 		
 			sendCommandToDevice(["lightBrightness": level]) { resp ->
 			
-				if (logsEnabled) log.debug("Received response:  ${resp.data}")
+				if (logsEnabled) log.debug("Received response: ${resp.data}")
 					
 				sendEventsForNewState(resp.data)
 
@@ -637,7 +640,7 @@ void componentSetLevel(cd, level, transitionTime = null) {
 	
 	}
 
-	fetchDeviceState()
+	// FIX: removed redundant fetchDeviceState()
 	
 }
 
@@ -657,8 +660,6 @@ void sendEventsForNewState(newState) {
 		
 		com.hubitat.app.ChildDeviceWrapper fanChild = getChildDevice("${device.id}-fan")
 	
-		String currentFanSpeed = fanChild.currentValue("speed")
-		
 		String fanSpeedEnumerated = convertFanSpeedToEnumerated(newState.fanSpeed)
 
 		String fanNewSwitchStatus = newState.fanOn ? "on" : "off"
@@ -675,13 +676,13 @@ void sendEventsForNewState(newState) {
 
 		}
 
-		fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.DisplayName} was turned ${fanNewSwitchStatus}")
+		// FIX: was fanChild.DisplayName (capital D) — Groovy property access is case-sensitive
+		fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
 
 		fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
-		
-	} else {
-		
-		deleteChildDevice(getChildDevice("${device.id}-fan").deviceNetworkId)
+
+		// FIX: child device deletion moved to createChildDevices() where it belongs,
+		// rather than triggering on every state update
 		
 	}
 	
@@ -704,10 +705,6 @@ void sendEventsForNewState(newState) {
 			lightChild.sendEvent(name: "presetLevel", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", unit: "%")
 
 		}
-		
-	} else {
-		
-		deleteChildDevice(getChildDevice("${device.id}-light").deviceNetworkId)
 		
 	}
 	
