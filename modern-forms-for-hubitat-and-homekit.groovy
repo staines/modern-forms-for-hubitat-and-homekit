@@ -14,14 +14,22 @@
  *  for the specific language governing permissions and limitations under the License.
  * 
  *  Changelog:
- *      2026-09-02v01 - Migrated to non-blocking asynchttpPost to prevent hub thread lockups.
+ *      2026-09-03v03 (Gemini Flash 3.8) - Removed pauseExecution thread delays from componentSetSpeed and componentSetLevel.
+ *                      Added explicit enabledLight and enabledFan checks to all component commands.
+ *                      Guarded changeDirection against disabled fan state.
+ *                      Updated componentCycleSpeed to start at fanSpeedLow when cycled from off/null.
+ *                      Moved direction control to fan child device (with parent alias).
+ *                      Added componentSetDirection for discrete HomeKit/rule commands.
+ *                      Fixed supportedFanSpeeds being sent to parent instead of fan child.
+ *                      Fixed componentSetLevel accidentally adjusting light when called on fan child.
+ *                      note:  used Claude Sonnet 5 Medium to review code; found several areas for improvement, but agreed with overall approach to unresponsiveness.
+ *      2026-09-02v01 (Gemini Flash 3.8) - Migrated to non-blocking asynchttpPost to prevent hub thread lockups.
  *                      Replaced recursive runIn chaining with Quartz cron schedules.
  *                      Added configurable polling blackout period for physical power cycles.
  *                      Increased default polling interval to 300s (5m) to prevent web-server exhaustion.
  *                      Added command throttling (pauseExecution) for HomeKit rapid-fire calls.
- *						used Gemini Flash 3.8 to mitigate memory leak causing fan server unresponsiveness.
- *						note:  chief issue was polling interval and not using async requests, which caused excessive memory usage.
- *		2026-02-25v01 - fix bugs: resp.date typo, fanSpeedNumber undefined, DisplayName capitalisation,
+ *						note:  used Gemini to identify cause of unresponsiveness; found chief issue was polling interval and not using async requests, which caused excessive memory usage.
+ *		2026-02-25v01 (Claude Opus) - fix bugs: resp.date typo, fanSpeedNumber undefined, DisplayName capitalisation,
  *		                redundant fetchDeviceState calls, null crash on child device deletion,
  *		                List<String> return type mismatch, polling chain duplication,
  *		                presetLevel null fallback, unguarded log.debug, implicit global params,
@@ -85,7 +93,7 @@ metadata {
         capability "Refresh"
 
         command "reboot"
-        command "changeDirection"
+        command "changeDirection" // Retained as parent alias delegating to fan child
     }
     
     preferences {
@@ -100,7 +108,7 @@ metadata {
             "900": "15 Minutes"
         ], defaultValue: "300"
         
-        input name: "blackoutEnabled", type: "bool", title: "Enable daily polling blackout (e.g. for wall switch reboots)", defaultValue: true
+        input name: "blackoutEnabled", type: "bool", title: "Enable daily polling blackout (for wall switch power cycles)", defaultValue: true
         input name: "blackoutStart", type: "time", title: "Blackout window start time", defaultValue: "00:58"
         input name: "blackoutEnd", type: "time", title: "Blackout window end time", defaultValue: "01:06"
 
@@ -150,8 +158,13 @@ void setupDevice() {
         log.warn "Could not create child devices: ${ex}"
     }
 
-    List<String> fanSpeedList = ["low", "medium-low", "medium", "medium-high", "high", "off", "on"]
-    sendEvent(name: "supportedFanSpeeds", value: new groovy.json.JsonBuilder(fanSpeedList))
+    if (enabledFan) {
+        def fanChild = getChildDevice("${device.id}-fan")
+        if (fanChild) {
+            List<String> fanSpeedList = ["low", "medium-low", "medium", "medium-high", "high", "off", "on"]
+            fanChild.sendEvent(name: "supportedFanSpeeds", value: groovy.json.JsonOutput.toJson(fanSpeedList))
+        }
+    }
         
     fetchDeviceState()
     schedulePollingCron()
@@ -203,15 +216,18 @@ void reboot() {
     sendCommandToDevice(["reboot": true])
 }
 
+// Parent alias for changeDirection delegating to fan child
 void changeDirection() {
-    if (logsEnabled) log.debug "changeDirection()"
-    String currentDirection = device.currentValue("direction")
-    if (!currentDirection) {
-        log.error "No current direction obtained"
+    if (!enabledFan) {
+        if (logsEnabled) log.warn "Ignoring changeDirection; fan device is disabled."
         return
     }
-    String newDirection = (currentDirection == "forward") ? "reverse" : "forward"
-    sendCommandToDevice(["fanDirection": newDirection])
+    def fanChild = getChildDevice("${device.id}-fan")
+    if (fanChild) {
+        componentChangeDirection(fanChild)
+    } else {
+        log.error "Cannot change direction; fan child device does not exist"
+    }
 }
 
 void fetchDeviceState() {
@@ -322,10 +338,12 @@ void createChildDevices() {
 void componentOn(cd) {
     if (logsEnabled) log.debug "componentOn(${cd})"
     if (cd.deviceNetworkId.endsWith("-light")) {
+        if (!enabledLight) return
         def lightChild = getChildDevice("${device.id}-light")
-        int brightness = (lightChild?.currentValue("presetLevel") ?: 100) as int
+        int brightness = (lightChild?.currentValue("presetLevel") ?: lightChild?.currentValue("level") ?: 100) as int
         sendCommandToDevice(["lightOn": true, "lightBrightness": brightness])
     } else if (cd.deviceNetworkId.endsWith("-fan")) {
+        if (!enabledFan) return
         sendCommandToDevice(["fanOn": true])
     }
 }
@@ -333,33 +351,54 @@ void componentOn(cd) {
 void componentOff(cd) {
     if (logsEnabled) log.debug "componentOff(${cd})"
     if (cd.deviceNetworkId.endsWith("-light")) {
+        if (!enabledLight) return
         sendCommandToDevice(["lightOn": false])
     } else if (cd.deviceNetworkId.endsWith("-fan")) {
+        if (!enabledFan) return
         sendCommandToDevice(["fanOn": false])
     }
 }
 
 void componentCycleSpeed(cd) {
     if (logsEnabled) log.debug "componentCycleSpeed(${cd})"
+    if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
     def fanChild = getChildDevice("${device.id}-fan")
     String currentFanSpeed = fanChild?.currentValue("speed")
-    if (!currentFanSpeed) return
+    int defaultLow = (settings.fanSpeedLow ?: 2) as int
 
-    int newFanSpeed = 0
+    int newFanSpeed
     switch (currentFanSpeed) {
-        case "low": newFanSpeed = 3; break
-        case "medium-low": newFanSpeed = 4; break
-        case "medium": newFanSpeed = 5; break
-        case "medium-high": newFanSpeed = 6; break
-        case "high": newFanSpeed = (settings.fanSpeedLow ?: 2) as int; break
+        case "off":
+        case null:
+            newFanSpeed = defaultLow
+            break
+        case "low":
+            newFanSpeed = 3
+            break
+        case "medium-low":
+            newFanSpeed = 4
+            break
+        case "medium":
+            newFanSpeed = 5
+            break
+        case "medium-high":
+            newFanSpeed = 6
+            break
+        case "high":
+            newFanSpeed = defaultLow
+            break
+        default:
+            newFanSpeed = defaultLow
+            break
     }
     sendCommandToDevice(["fanOn": true, "fanSpeed": newFanSpeed])
 }
 
 void componentSetSpeed(cd, value) {
     if (logsEnabled) log.debug "componentSetSpeed(${cd}, ${value})"
-    pauseExecution(250)
-    
+    if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
     if (value == "off") {
         componentOff(cd)
     } else if (value == "on") {
@@ -376,16 +415,59 @@ void componentSetSpeed(cd, value) {
 
 void componentSetLevel(cd, level, transitionTime = null) {
     if (logsEnabled) log.debug "componentSetLevel(${cd}, ${level})"
-    pauseExecution(250)
     
-    if (level == 0) {
-        componentOff(cd)
-    } else {
-        if (lightOnWithSetLevel) {
-            sendCommandToDevice(["lightOn": true, "lightBrightness": level])
+    if (cd.deviceNetworkId.endsWith("-light")) {
+        if (!enabledLight) return
+        if (level == 0) {
+            componentOff(cd)
         } else {
-            sendCommandToDevice(["lightBrightness": level])
+            if (lightOnWithSetLevel) {
+                sendCommandToDevice(["lightOn": true, "lightBrightness": level])
+            } else {
+                sendCommandToDevice(["lightBrightness": level])
+            }
         }
+    } else if (cd.deviceNetworkId.endsWith("-fan")) {
+        if (!enabledFan) return
+        // Map 1-100% dimmer levels to 6-speed fan values if called by percentage controllers
+        if (level == 0) {
+            componentOff(cd)
+        } else {
+            int speedValue = Math.min(6, Math.max(1, Math.round((level as float) / 100 * 6)))
+            if (fanOnWithSetSpeed) {
+                sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue])
+            } else {
+                sendCommandToDevice(["fanSpeed": speedValue])
+            }
+        }
+    }
+}
+
+void componentChangeDirection(cd) {
+    if (logsEnabled) log.debug "componentChangeDirection(${cd})"
+    if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
+    def fanChild = getChildDevice("${device.id}-fan")
+    String currentDirection = fanChild?.currentValue("direction")
+    if (!currentDirection) {
+        log.warn "Current fan direction unknown, defaulting to forward"
+        currentDirection = "reverse"
+    }
+    String newDirection = (currentDirection == "forward") ? "reverse" : "forward"
+    sendCommandToDevice(["fanDirection": newDirection])
+}
+
+void componentSetDirection(cd, String direction) {
+    if (logsEnabled) log.debug "componentSetDirection(${cd}, ${direction})"
+    if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
+    String target = direction.toLowerCase()
+    if (target.contains("forward") || target.contains("clockwise")) {
+        sendCommandToDevice(["fanDirection": "forward"])
+    } else if (target.contains("reverse") || target.contains("counter")) {
+        sendCommandToDevice(["fanDirection": "reverse"])
+    } else {
+        log.warn "Unsupported direction value: ${direction}"
     }
 }
 
