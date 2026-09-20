@@ -14,6 +14,13 @@
  *	for the specific language governing permissions and limitations under the License.
  *
  *	Changelog:
+ *		2026-09-20v08 - Gate child events on what the parent last sent (state "sent_*" keys) instead of
+ *		                cd.currentValue(name). currentValue does not reliably round-trip the child's
+ *		                custom attributes back to the parent, so the v07 change guards never matched
+ *		                and direction/lastRunningSpeed kept filling the event log. setupDevice()
+ *		                clears the cache so saving preferences forces a full re-sync.
+ *		                Add a debug line reporting incoming vs last-sent vs child currentValue for
+ *		                each attribute, to confirm where the events originate.
  *		2026-09-20v07 - Echo a "level" event to the fan child on every state update, mapped from fanSpeed.
  *		                The child declares SwitchLevel (Set Level is present) but level was never
  *		                reported, so HomeKit's RotationSpeed had no value and Siri/Alexa fell back to
@@ -248,6 +255,9 @@ void setupDevice() {
 	if (logsEnabled) log.debug("setupDevice()")
 
 	unschedule()
+
+	// forget the last-sent values so the next state update re-syncs every attribute
+	clearSentEventCache()
 
 	try {
 
@@ -852,6 +862,54 @@ void componentRefresh(cd) {
 
 }
 
+void sendChildEvent(cd, String name, value, String descriptionText, String unit = null) {
+// send a child event only when the value has actually changed
+//
+// gated on parent state rather than cd.currentValue(name).  currentValue does not
+// reliably round-trip the child's custom attributes (direction, lastRunningSpeed) back
+// to the parent, so comparing against it let every poll through and the event log kept
+// filling.  comparing against what we last sent is deterministic.
+//
+// setupDevice() clears these keys, so saving preferences forces a full re-sync if the
+// child and the parent's record ever drift apart.
+
+	if (!cd || !name) return
+
+	String key = "sent_${cd.deviceNetworkId}_${name}"
+	String incoming = (value == null) ? "" : value.toString()
+	String previous = (state[key] == null) ? null : state[key].toString()
+
+	if (logsEnabled) {
+
+		def childValue = null
+		try {
+			childValue = cd.currentValue(name)
+		} catch (Exception e) {
+			childValue = "<unreadable: ${e.message}>"
+		}
+
+		log.debug "sendChildEvent(${name}): incoming='${incoming}' lastSent='${previous}' childCurrentValue='${childValue}' (${childValue?.getClass()?.simpleName})"
+
+	}
+
+	if (previous == incoming) return
+
+	state[key] = incoming
+
+	Map evt = [name: name, value: value, descriptionText: descriptionText]
+	if (unit) evt.unit = unit
+
+	cd.sendEvent(evt)
+
+}
+
+void clearSentEventCache() {
+// forget what we last sent, so the next state update re-syncs every attribute
+
+	state.findAll { it.key.toString().startsWith("sent_") }.each { state.remove(it.key) }
+
+}
+
 void sendEventsForNewState(newState) {
 // set child device states
 //
@@ -870,13 +928,7 @@ void sendEventsForNewState(newState) {
 
 				state.fanDirection = newState.fanDirection
 
-				// gated on change.  direction and lastRunningSpeed are custom attributes on
-				// the child driver, so Hubitat's duplicate-event filter does not suppress
-				// them the way it does speed and switch; writing them unconditionally put
-				// two junk rows in the event log on every single poll.
-				if (fanChild.currentValue("direction") != newState.fanDirection) {
-					fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
-				}
+				sendChildEvent(fanChild, "direction", newState.fanDirection, "${fanChild.displayName} direction was set to ${newState.fanDirection}")
 
 			}
 
@@ -885,23 +937,21 @@ void sendEventsForNewState(newState) {
 				boolean fanIsOn = (newState.fanOn == true)
 				String fanNewSwitchStatus = fanIsOn ? "on" : "off"
 
-				if (fanChild.currentValue("switch") != fanNewSwitchStatus) {
-					fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
-				}
+				sendChildEvent(fanChild, "switch", fanNewSwitchStatus, "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
 
 				if (newState.containsKey("fanSpeed")) {
 
 					String rawSpeedEnumerated = convertFanSpeedToEnumerated(newState.fanSpeed)
 					String fanSpeedEnumerated = fanIsOn ? rawSpeedEnumerated : "off"
 
-					if (fanSpeedEnumerated && fanChild.currentValue("speed") != fanSpeedEnumerated) {
-						fanChild.sendEvent(name: "speed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
+					if (fanSpeedEnumerated) {
+						sendChildEvent(fanChild, "speed", fanSpeedEnumerated, "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
 					}
 
 					// lastRunningSpeed keeps the speed the fan was at even while it reads off,
 					// so it must track the raw speed rather than the switch-masked value
-					if (rawSpeedEnumerated && rawSpeedEnumerated != "off" && fanChild.currentValue("lastRunningSpeed") != rawSpeedEnumerated) {
-						fanChild.sendEvent(name: "lastRunningSpeed", value: rawSpeedEnumerated, descriptionText: "${fanChild.displayName} lastRunningSpeed was set to ${rawSpeedEnumerated}")
+					if (rawSpeedEnumerated && rawSpeedEnumerated != "off") {
+						sendChildEvent(fanChild, "lastRunningSpeed", rawSpeedEnumerated, "${fanChild.displayName} lastRunningSpeed was set to ${rawSpeedEnumerated}")
 					}
 
 					// report a percentage so HomeKit and Alexa have a live RotationSpeed to
@@ -916,14 +966,9 @@ void sendEventsForNewState(newState) {
 
 					int fanLevel = fanIsOn ? speedToLevel(rawSpeed) : 0
 
-					// only write it if the child actually declares the attribute.  writing an
-					// undeclared attribute is what made lastRunningSpeed and direction generate
-					// a junk event on every poll without ever becoming a current state.
 					if (fanChild.hasAttribute("level")) {
 
-						if (fanChild.currentValue("level") != fanLevel) {
-							fanChild.sendEvent(name: "level", value: fanLevel, descriptionText: "${fanChild.displayName} level was set to ${fanLevel}%", unit: "%")
-						}
+						sendChildEvent(fanChild, "level", fanLevel, "${fanChild.displayName} level was set to ${fanLevel}%", "%")
 
 					} else if (logsEnabled) {
 
@@ -948,22 +993,14 @@ void sendEventsForNewState(newState) {
 
 				String lightNewSwitchStatus = (newState.lightOn == true) ? "on" : "off"
 
-				if (lightChild.currentValue("switch") != lightNewSwitchStatus) {
-
-					lightChild.sendEvent(name: "switch", value: lightNewSwitchStatus, descriptionText: "${lightChild.displayName} was turned ${lightNewSwitchStatus}")
-
-				}
+				sendChildEvent(lightChild, "switch", lightNewSwitchStatus, "${lightChild.displayName} was turned ${lightNewSwitchStatus}")
 
 			}
 
 			if (newState.containsKey("lightBrightness") && newState.lightBrightness != null) {
 
-				if (lightChild.currentValue("level") != newState.lightBrightness) {
-
-					lightChild.sendEvent(name: "level", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} level was set to ${newState.lightBrightness}%", unit: "%")
-					lightChild.sendEvent(name: "presetLevel", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", unit: "%")
-
-				}
+				sendChildEvent(lightChild, "level", newState.lightBrightness, "${lightChild.displayName} level was set to ${newState.lightBrightness}%", "%")
+				sendChildEvent(lightChild, "presetLevel", newState.lightBrightness, "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", "%")
 
 			}
 
