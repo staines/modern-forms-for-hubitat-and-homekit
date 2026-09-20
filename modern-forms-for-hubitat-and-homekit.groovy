@@ -14,6 +14,11 @@
  *	for the specific language governing permissions and limitations under the License.
  *
  *	Changelog:
+ *		2026-09-20v09 - Fix sandbox rejection: "Expression [MethodCallExpression] is not allowed:
+ *		                childValue?.getClass()". The Hubitat sandbox blocks getClass(), so the
+ *		                diagnostic debug line now reports the type with instanceof instead.
+ *		                Rewrite clearSentEventCache() to collect keys before removing them rather
+ *		                than mutating state while iterating it.
  *		2026-09-20v08 - Gate child events on what the parent last sent (state "sent_*" keys) instead of
  *		                cd.currentValue(name). currentValue does not reliably round-trip the child's
  *		                custom attributes back to the parent, so the v07 change guards never matched
@@ -888,7 +893,14 @@ void sendChildEvent(cd, String name, value, String descriptionText, String unit 
 			childValue = "<unreadable: ${e.message}>"
 		}
 
-		log.debug "sendChildEvent(${name}): incoming='${incoming}' lastSent='${previous}' childCurrentValue='${childValue}' (${childValue?.getClass()?.simpleName})"
+		// getClass() is blocked by the Hubitat sandbox, so report the type with instanceof
+		String childType = (childValue == null) ? "null" :
+			(childValue instanceof String) ? "String" :
+			(childValue instanceof Integer) ? "Integer" :
+			(childValue instanceof BigDecimal) ? "BigDecimal" :
+			(childValue instanceof Number) ? "Number" : "other"
+
+		log.debug "sendChildEvent(${name}): incoming='${incoming}' lastSent='${previous}' childCurrentValue='${childValue}' (${childType})"
 
 	}
 
@@ -906,7 +918,14 @@ void sendChildEvent(cd, String name, value, String descriptionText, String unit 
 void clearSentEventCache() {
 // forget what we last sent, so the next state update re-syncs every attribute
 
-	state.findAll { it.key.toString().startsWith("sent_") }.each { state.remove(it.key) }
+	// collect first, then remove; avoids mutating state while iterating it
+	List toRemove = []
+
+	state.each { k, v ->
+		if (k != null && k.toString().startsWith("sent_")) toRemove.add(k)
+	}
+
+	toRemove.each { state.remove(it) }
 
 }
 
