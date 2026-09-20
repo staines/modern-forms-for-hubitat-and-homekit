@@ -14,6 +14,13 @@
  *	for the specific language governing permissions and limitations under the License.
  *
  *	Changelog:
+ *		2026-09-20v10 - Remove fan direction control entirely. Sending a fanDirection key makes the
+ *		                Mykonos 5 drop off wifi every time, whatever value is sent; it is a firmware
+ *		                fault with no driver-side workaround. Removed the changeDirection command,
+ *		                changeDirection(), componentChangeDirection() and componentSetDirection(),
+ *		                and the now-dead state.fanDirection. fanDirection is still READ from the
+ *		                shadow document and reported to the fan child as an informational attribute,
+ *		                which sends nothing to the fan. Left a prominent do-not-re-add note.
  *		2026-09-20v09 - Fix sandbox rejection: "Expression [MethodCallExpression] is not allowed:
  *		                childValue?.getClass()". The Hubitat sandbox blocks getClass(), so the
  *		                diagnostic debug line now reports the type with instanceof instead.
@@ -125,6 +132,12 @@
  *		path addresses all 6 speeds directly and is what Siri and Alexa use
  *		for numeric speed commands, so both paths are kept in sync.
  *
+ *		fan direction cannot be controlled from this driver. writing a
+ *		"fanDirection" key makes the Mykonos 5 drop off wifi every time,
+ *		whatever value is sent, so all direction commands were removed in
+ *		v10. the current direction is still read and reported. reverse the
+ *		fan with the wall control or the Modern Forms app.
+ *
  *		the Hubitat HomeKit bridge only exposes generic fan and light child
  *		devices, so the children must remain "Generic Component Fan Control"
  *		and "Generic Component Dimmer".  anything those drivers do not declare
@@ -158,7 +171,9 @@ metadata {
 		capability "Refresh"
 
 		command "reboot"
-		command "changeDirection"
+
+		// deliberately no changeDirection command -- writing fanDirection drops the
+		// fan off wifi; see the note above convertFanSpeedToEnumerated
 
 	}
 
@@ -362,24 +377,15 @@ void reboot() {
 
 }
 
-void changeDirection() {
-// change fan direction (parent alias delegating to fan child)
-
-	if (logsEnabled) log.debug("changeDirection()")
-
-	if (!enabledFan) {
-		if (logsEnabled) log.warn "Ignoring changeDirection; fan device is disabled."
-		return
-	}
-
-	def fanChild = getChildDevice("${device.id}-fan")
-	if (fanChild) {
-		componentChangeDirection(fanChild)
-	} else {
-		log.error "Cannot change direction; fan child device does not exist"
-	}
-
-}
+// DIRECTION CONTROL IS DELIBERATELY ABSENT -- DO NOT RE-ADD
+//
+// Sending a "fanDirection" key to the Mykonos 5 makes the fan drop off wifi every
+// time, whatever value is sent. It is a firmware fault with no driver-side workaround,
+// so changeDirection, componentChangeDirection and componentSetDirection were all
+// removed in v10 rather than left in place to knock the fan off the network.
+// fanDirection is still READ from the shadow document and reported to the fan child as
+// an informational attribute; reading it sends nothing and is safe. Use the wall
+// control or the Modern Forms app to reverse the fan.
 
 // fan speed conversion
 //
@@ -816,47 +822,9 @@ void componentSetLevel(cd, level, transitionTime = null) {
 
 }
 
-void componentChangeDirection(cd) {
-// change fan direction on child device
-
-	if (logsEnabled) log.debug "componentChangeDirection(${cd})"
-	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
-
-	def fanChild = getChildDevice("${device.id}-fan")
-
-	// the child does carry a direction attribute; parent state is only a fallback for
-	// the window before the first poll has reported one
-	String currentDirection = fanChild?.currentValue("direction") ?: state.fanDirection
-
-	if (!currentDirection) {
-		log.warn "Current fan direction unknown; assuming forward and reversing"
-		currentDirection = "forward"
-	}
-
-	String newDirection = (currentDirection == "forward") ? "reverse" : "forward"
-
-	if (logsEnabled) log.debug "Changing direction from ${currentDirection} to ${newDirection}"
-
-	queueCommand(["fanDirection": newDirection])
-
-}
-
-void componentSetDirection(cd, String direction) {
-// set discrete fan direction on child device
-
-	if (logsEnabled) log.debug "componentSetDirection(${cd}, ${direction})"
-	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
-
-	String target = direction?.toLowerCase() ?: ""
-	if (target.contains("forward") || target.contains("clockwise")) {
-		queueCommand(["fanDirection": "forward"])
-	} else if (target.contains("reverse") || target.contains("counter")) {
-		queueCommand(["fanDirection": "reverse"])
-	} else {
-		log.warn "Unsupported direction value: ${direction}"
-	}
-
-}
+// componentChangeDirection and componentSetDirection removed in v10.
+// See the note above convertFanSpeedToEnumerated: writing fanDirection drops the fan
+// off wifi. Do not re-add.
 
 void componentRefresh(cd) {
 // refresh device; treated as a manual refresh so it overrides the blackout window
@@ -943,11 +911,12 @@ void sendEventsForNewState(newState) {
 		def fanChild = getChildDevice("${device.id}-fan")
 		if (fanChild) {
 
+			// read-only. reporting direction sends nothing to the fan and is safe; the
+			// driver has no way to CHANGE it (see v10 note). this just surfaces whatever
+			// was set at the wall control or in the Modern Forms app.
 			if (newState.containsKey("fanDirection") && newState.fanDirection) {
 
-				state.fanDirection = newState.fanDirection
-
-				sendChildEvent(fanChild, "direction", newState.fanDirection, "${fanChild.displayName} direction was set to ${newState.fanDirection}")
+				sendChildEvent(fanChild, "direction", newState.fanDirection, "${fanChild.displayName} direction is ${newState.fanDirection}")
 
 			}
 
