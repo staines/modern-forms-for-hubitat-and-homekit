@@ -3,7 +3,7 @@
  *
  *	Copyright 2026 Chris Staines
  *	Based on code from Robert Morris, Ben Hamilton, 1info, and Hubitat
- *
+ * 
  *	Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *	in compliance with the License. You may obtain a copy of the License at:
  *
@@ -12,54 +12,8 @@
  *	Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
  *	on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *	for the specific language governing permissions and limitations under the License.
- *
+ * 
  *	Changelog:
- *		2026-09-20v10 - Remove fan direction control entirely. Sending a fanDirection key makes the
- *		                Mykonos 5 drop off wifi every time, whatever value is sent; it is a firmware
- *		                fault with no driver-side workaround. Removed the changeDirection command,
- *		                changeDirection(), componentChangeDirection() and componentSetDirection(),
- *		                and the now-dead state.fanDirection. fanDirection is still READ from the
- *		                shadow document and reported to the fan child as an informational attribute,
- *		                which sends nothing to the fan. Left a prominent do-not-re-add note.
- *		2026-09-20v09 - Fix sandbox rejection: "Expression [MethodCallExpression] is not allowed:
- *		                childValue?.getClass()". The Hubitat sandbox blocks getClass(), so the
- *		                diagnostic debug line now reports the type with instanceof instead.
- *		                Rewrite clearSentEventCache() to collect keys before removing them rather
- *		                than mutating state while iterating it.
- *		2026-09-20v08 - Gate child events on what the parent last sent (state "sent_*" keys) instead of
- *		                cd.currentValue(name). currentValue does not reliably round-trip the child's
- *		                custom attributes back to the parent, so the v07 change guards never matched
- *		                and direction/lastRunningSpeed kept filling the event log. setupDevice()
- *		                clears the cache so saving preferences forces a full re-sync.
- *		                Add a debug line reporting incoming vs last-sent vs child currentValue for
- *		                each attribute, to confirm where the events originate.
- *		2026-09-20v07 - Echo a "level" event to the fan child on every state update, mapped from fanSpeed.
- *		                The child declares SwitchLevel (Set Level is present) but level was never
- *		                reported, so HomeKit's RotationSpeed had no value and Siri/Alexa fell back to
- *		                named speeds only. This restores numeric/percentage fan speed vocabulary.
- *		                Replace the uneven level->speed map with even 6-bucket thresholds that
- *		                round-trip stably against the speed->level map (old map gave speed 1 a 24-point
- *		                range and speed 6 only 9, and ignored fanSpeedLow).
- *		                Gate every child event on an actual value change. direction and
- *		                lastRunningSpeed are custom attributes on Generic Component Fan Control and are
- *		                not covered by Hubitat's duplicate-event filter, so writing them
- *		                unconditionally added two junk event rows per poll (~576/day at 5m).
- *		                Fix lastRunningSpeed to track the raw speed rather than the switch-masked
- *		                value, so it survives the fan reading off.
- *		                Clarify the changeDirection fallback (was assigning "reverse" under a log
- *		                message saying "defaulting to forward") and back it with parent state for the
- *		                window before the first poll reports a direction.
- *		                Guard sendEventsForNewState on containsKey so a partial response (e.g. the
- *		                reboot POST) can no longer report the fan and light as off.
- *		                Allow manual refresh to override the polling blackout window, with an info log.
- *		                Log fan communication errors at warn unconditionally instead of only when
- *		                debug logging is enabled.
- *		                Replace pauseExecution(250) after async dispatch with a 300ms coalescing
- *		                debounce, so a dragged HomeKit slider collapses into a single POST instead of
- *		                blocking the driver thread after each one.
- *		                Coerce fanSpeed to Integer before enumerating to survive BigDecimal/String JSON.
- *		                Add Actuator capability. Fall back to fixed blackout times when the time
- *		                inputs are unset, since Hubitat does not honor defaultValue on type: "time".
  *		2026-09-03v06 - Add blackout window check inside setupDevice() to prevent state fetches on hub reboot.
  *		                Safely parse settings.fanSpeedLow using null-safe check to prevent cast errors on install.
  *		                Harden componentSetLevel against 0% light race conditions.
@@ -109,6 +63,7 @@
  *		2023-08-13v04 - homekit idiosyncrasies
  *		2023-08-13v03 - clean up
  *		2023-08-13v02 - fixing fan speed states x5
+ *		2023-08-13v01 - proper child device creation
  *		2023-08-12v01 - returned to 2023-08-11 base, versioning changes, added state updates
  *		2023-08-10v01 - initial try
  *
@@ -118,6 +73,7 @@
  *		add command "feedbackToneMute"
  *		add command "wind"
  *		add attribute "windSpeed"
+ *		add if (enabledLight) in front of light fixture references (do same for fan)
  */
 
 /**
@@ -125,24 +81,9 @@
  *
  *		requires an IP address for the device; suggest to
  *		set a static LAN IP via DHCP on your router for stability
- *
- *		fanSpeed for Modern Forms has 6 choices, while Hubitat's FanControl
- *		enumeration supports 5.  settings allow the user to select which
- *		Modern Forms speed backs Hubitat's "low".  the level (percentage)
- *		path addresses all 6 speeds directly and is what Siri and Alexa use
- *		for numeric speed commands, so both paths are kept in sync.
- *
- *		fan direction cannot be controlled from this driver. writing a
- *		"fanDirection" key makes the Mykonos 5 drop off wifi every time,
- *		whatever value is sent, so all direction commands were removed in
- *		v10. the current direction is still read and reported. reverse the
- *		fan with the wall control or the Modern Forms app.
- *
- *		the Hubitat HomeKit bridge only exposes generic fan and light child
- *		devices, so the children must remain "Generic Component Fan Control"
- *		and "Generic Component Dimmer".  anything those drivers do not declare
- *		as an attribute (direction, lastRunningSpeed) cannot be stored on the
- *		child and is tracked in parent state instead.
+ * 
+ *		fanSpeed for Modern Forms has 6 choices, while Hubitat has 5.  so
+ *		settings allow user to select a default Low speed
  *
  *		example fan response from 1info:
  *			"clientId": "MF_XXXXXXXXXXXX",
@@ -163,22 +104,19 @@
 */
 
 metadata {
-
+	
 	definition(name: "Modern Forms Fan and Light for HomeKit", namespace: "staines", author: "Chris Staines", importUrl: "https://raw.githubusercontent.com/staines/modern-forms-for-hubitat-and-homekit/main/modern-forms-for-hubitat-and-homekit.groovy") {
 
-		capability "Actuator"
 		capability "Initialize"
 		capability "Refresh"
 
 		command "reboot"
-
-		// deliberately no changeDirection command -- writing fanDirection drops the
-		// fan off wifi; see the note above convertFanSpeedToEnumerated
-
+		command "changeDirection"
+	  
 	}
-
+    
 	preferences {
-
+	   
 		input name: "ipAddress", type: "text", title: "IP address of the fan", required: true
 
 		input name: "logsEnabled", type: "bool", title: "Enable debug logging", defaultValue: false
@@ -194,9 +132,9 @@ metadata {
 
 		input name: "blackoutEnabled", type: "bool", title: "Enable daily polling blackout (for wall switch power cycles)", defaultValue: true
 
-		input name: "blackoutStart", type: "time", title: "Blackout window start time (defaults to 00:58 if unset)"
+		input name: "blackoutStart", type: "time", title: "Blackout window start time", defaultValue: "00:58"
 
-		input name: "blackoutEnd", type: "time", title: "Blackout window end time (defaults to 01:06 if unset)"
+		input name: "blackoutEnd", type: "time", title: "Blackout window end time", defaultValue: "01:06"
 
 		input name: "enabledLight", type: "bool", title: "Enable light device (disabling deletes child)", defaultValue: true
 
@@ -207,55 +145,47 @@ metadata {
 		input name: "fanSpeedLow", type: "number", title: "Modern Forms fan speed to use as Hubitat's low speed (1 or 2)", defaultValue: 2, range: 1..2
 
 		input name: "fanOnWithSetSpeed", type: "bool", title: "Turn fan on when setting a fan speed (helps HomeKit)", defaultValue: true
-
+		
 	}
-
+	
 }
-
-// constants
-
-@groovy.transform.Field static final String FALLBACK_BLACKOUT_START = "00:58"
-@groovy.transform.Field static final String FALLBACK_BLACKOUT_END = "01:06"
-
-// the debounce window for coalescing rapid commands (e.g. a dragged HomeKit slider)
-@groovy.transform.Field static final int COMMAND_DEBOUNCE_MS = 300
 
 // capabilities
 
 void installed() {
 // setup device after installation
-
+	
 	if (logsEnabled) log.debug("Installed")
-
+	
 	setupDevice()
-
+	
 }
 
 void updated() {
 // setup device after update
-
+	
 	if (logsEnabled) log.debug("Updated")
-
+	
 	setupDevice()
-
+	
 }
 
 void initialize() {
 // setup device after initialization
-
+	
 	if (logsEnabled) log.debug("Initialized")
-
+	
 	setupDevice()
-
+	
 }
 
 void refresh() {
-// refresh device; a manual refresh overrides the blackout window
-
+// refresh device
+	
 	if (logsEnabled) log.debug("Refresh")
-
-	fetchDeviceState(true)
-
+	
+	fetchDeviceState()
+	
 }
 
 // variables
@@ -264,7 +194,7 @@ String deviceURI() {
 // set device URL based on ipAddress
 
 	return "http://${ipAddress}/mf"
-
+	
 }
 
 // device-specific functions
@@ -275,43 +205,33 @@ void setupDevice() {
 	if (logsEnabled) log.debug("setupDevice()")
 
 	unschedule()
-
-	// forget the last-sent values so the next state update re-syncs every attribute
-	clearSentEventCache()
-
+		
 	try {
-
+		
 		createChildDevices()
-
+		
 	} catch (Exception ex) {
-
+		
 		log.warn "Could not create child devices: ${ex}"
-
+		
 	}
 
 	if (enabledFan) {
-
 		def fanChild = getChildDevice("${device.id}-fan")
-
 		if (fanChild) {
-
-			// "off" and "on" belong here per the FanControl convention; keeping them means
-			// setSpeed("off") still works from dashboards and voice assistants
 			List<String> fanSpeedList = ["low", "medium-low", "medium", "medium-high", "high", "off", "on"]
 			fanChild.sendEvent(name: "supportedFanSpeeds", value: groovy.json.JsonOutput.toJson(fanSpeedList))
-
 		}
-
 	}
-
+		
 	if (!isInBlackoutWindow()) {
 		fetchDeviceState()
 	} else if (logsEnabled) {
 		log.debug "Skipping initial setup state fetch; inside blackout window."
 	}
-
+	
 	schedulePollingCron()
-
+		
 }
 
 void schedulePollingCron() {
@@ -325,7 +245,7 @@ void schedulePollingCron() {
 
 	int mins = Math.max(1, Math.round(interval / 60))
 	String cronStr = (mins == 1) ? "0 * * ? * *" : "0 */${mins} * ? * *"
-
+	
 	if (logsEnabled) log.debug "Scheduling device state poll every ${mins} minute(s) via cron: ${cronStr}"
 	schedule(cronStr, 'runPoll')
 
@@ -345,18 +265,13 @@ void runPoll() {
 boolean isInBlackoutWindow() {
 // check if current time falls within blackout window
 
-	if (!settings?.blackoutEnabled) return false
-
-	// Hubitat does not reliably honor defaultValue on a type: "time" input, so an
-	// untouched install would silently disable the feature.  fall back explicitly.
-	String startSetting = settings?.blackoutStart ?: FALLBACK_BLACKOUT_START
-	String endSetting = settings?.blackoutEnd ?: FALLBACK_BLACKOUT_END
-
+	if (!settings?.blackoutEnabled || !settings?.blackoutStart || !settings?.blackoutEnd) return false
+	
 	try {
 		Date now = new Date()
-		Date startTime = timeToday(startSetting, location.timeZone)
-		Date endTime = timeToday(endSetting, location.timeZone)
-
+		Date startTime = timeToday(settings.blackoutStart, location.timeZone)
+		Date endTime = timeToday(settings.blackoutEnd, location.timeZone)
+		
 		if (startTime && endTime) {
 			return (endTime < startTime) ? (now >= startTime || now <= endTime) : (now >= startTime && now <= endTime)
 		}
@@ -369,81 +284,70 @@ boolean isInBlackoutWindow() {
 
 void reboot() {
 // reboot the device
-
+	
 	if (logsEnabled) log.debug("reboot()")
-
-	// sent directly rather than queued; must not be coalesced with anything else
+		
 	sendCommandToDevice(["reboot": true])
-
+	
 }
 
-// DIRECTION CONTROL IS DELIBERATELY ABSENT -- DO NOT RE-ADD
-//
-// Sending a "fanDirection" key to the Mykonos 5 makes the fan drop off wifi every
-// time, whatever value is sent. It is a firmware fault with no driver-side workaround,
-// so changeDirection, componentChangeDirection and componentSetDirection were all
-// removed in v10 rather than left in place to knock the fan off the network.
-// fanDirection is still READ from the shadow document and reported to the fan child as
-// an informational attribute; reading it sends nothing and is safe. Use the wall
-// control or the Modern Forms app to reverse the fan.
-
-// fan speed conversion
-//
-// Modern Forms exposes 6 speeds.  Hubitat's FanControl enumeration carries 5, so
-// speeds 1 and 2 both read as "low" there.  the level (percentage) path below
-// addresses all 6 directly and is what Siri and Alexa drive for numeric commands.
-// speedToLevel and levelToSpeed are deliberate inverses so a round trip is stable.
+void changeDirection() {
+// change fan direction (parent alias delegating to fan child)
+	
+	if (logsEnabled) log.debug("changeDirection()")
+		
+	if (!enabledFan) {
+		if (logsEnabled) log.warn "Ignoring changeDirection; fan device is disabled."
+		return
+	}
+	
+	def fanChild = getChildDevice("${device.id}-fan")
+	if (fanChild) {
+		componentChangeDirection(fanChild)
+	} else {
+		log.error "Cannot change direction; fan child device does not exist"
+	}
+	
+}
 
 String convertFanSpeedToEnumerated(fanSpeedNumber) {
 // convert fan speed number from Modern Forms to fan speed enumerated value for Hubitat
-
-	// coerce first; JSON parsing can hand back BigDecimal or String and the
-	// integer cases below would otherwise all miss and fall through to default
-	Integer speed = null
-	if (fanSpeedNumber != null) {
-		try {
-			speed = (fanSpeedNumber as BigDecimal).intValue()
-		} catch (Exception e) {
-			log.error("Unable to interpret fan speed of ${fanSpeedNumber}")
-			return null
-		}
-	}
-
-	switch (speed) {
-
+	
+	switch (fanSpeedNumber) {
+		
 		case 1: case 2:
-
+		
 			// due to Modern Forms using 6 speeds and Hubitat supporting 5, we consolidate 1 and 2 into "low"
 			return "low"
 
 		case 3:
-
+		
 			return "medium-low"
 
 		case 4:
-
+		
 			return "medium"
-
+			
 		case 5:
-
+		
 			return "medium-high"
-
+			
 		case 6:
-
+		
 			return "high"
 
 		case 0: case null:
 
 			return "off"
-
+			
 		default:
-
+		
 			log.error("Unable to enumerate fan speed of ${fanSpeedNumber}")
 
 			return null
-
+			
 	}
-
+	
 }
 
 int convertFanSpeedToNumber(String fanSpeedEnumeratedValue) {
@@ -452,102 +356,44 @@ int convertFanSpeedToNumber(String fanSpeedEnumeratedValue) {
 	int defaultLow = (settings?.fanSpeedLow != null) ? (settings.fanSpeedLow as int) : 2
 
 	switch (fanSpeedEnumeratedValue) {
-
+		
 		case "low":
-
+		
 			return defaultLow
-
+			
 		case "medium-low":
-
+		
 			return 3
-
+			
 		case "medium":
-
+		
 			return 4
-
+			
 		case "medium-high":
-
+		
 			return 5
-
+			
 		case "high":
-
+		
 			return 6
 
 		case "off":
 
 			return 0
-
+			
 		default:
-
+		
 			log.error("Unable to convert fan speed of ${fanSpeedEnumeratedValue} to number")
 
 			return defaultLow
-
+			
 	}
-
-}
-
-int speedToLevel(int fanSpeedNumber) {
-// convert a Modern Forms fan speed (1-6) to the percentage reported to HomeKit
-
-	switch (fanSpeedNumber) {
-		case 1: return 17
-		case 2: return 33
-		case 3: return 50
-		case 4: return 67
-		case 5: return 84
-		case 6: return 100
-		default: return 0
-	}
-
-}
-
-int levelToSpeed(int level) {
-// convert a percentage from HomeKit to a Modern Forms fan speed (1-6)
-//
-// even 6-bucket thresholds, and the exact inverse of speedToLevel, so
-// speed -> level -> speed round-trips without drift
-
-	if (level <= 17) return 1
-	if (level <= 33) return 2
-	if (level <= 50) return 3
-	if (level <= 67) return 4
-	if (level <= 84) return 5
-	return 6
-
-}
-
-// command dispatch
-
-void queueCommand(Map jsonBodyMap) {
-// coalesce rapid commands into a single POST
-//
-// HomeKit and Alexa sliders emit a burst of setLevel/setSpeed calls.  merging them
-// on a short timer collapses the burst into one request, which protects the fan's
-// small web server without blocking the driver thread the way pauseExecution did.
-
-	Map pending = (state.pendingCommand ?: [:]) + jsonBodyMap
-	state.pendingCommand = pending
-
-	if (logsEnabled) log.debug "Queued command: ${jsonBodyMap} (pending: ${pending})"
-
-	runInMillis(COMMAND_DEBOUNCE_MS, 'flushPendingCommand', [overwrite: true])
-
-}
-
-void flushPendingCommand() {
-// send whatever has accumulated in the debounce window
-
-	Map pending = state.pendingCommand as Map
-	state.pendingCommand = null
-
-	if (pending) sendCommandToDevice(pending)
-
+	
 }
 
 void sendCommandToDevice(Map jsonBodyMap) {
 // build and send asynchronous command to device
-
+	
 	if (!ipAddress) {
 		log.warn "IP Address not configured"
 		return
@@ -567,16 +413,14 @@ void sendCommandToDevice(Map jsonBodyMap) {
 	} catch (Exception e) {
 		log.error "Error dispatching async HTTP request: ${e}"
 	}
-
+	
 }
 
 void asyncHttpCallback(response, data) {
 // handle response from asynchronous HTTP call
 
 	if (response.hasError()) {
-		// logged unconditionally; with debug off this was the only signal that
-		// the fan was unreachable, and it was being swallowed
-		log.warn "Modern Forms fan at ${ipAddress} unreachable (request: ${data?.body}): ${response.errorMessage}"
+		if (logsEnabled) log.warn "Fan communication error: ${response.errorMessage}"
 		return
 	}
 
@@ -590,38 +434,35 @@ void asyncHttpCallback(response, data) {
 
 }
 
-void fetchDeviceState(boolean manual = false) {
-// obtain the device state; a manual refresh overrides the blackout window
+void fetchDeviceState() {
+// obtain the device state
 
-	if (isInBlackoutWindow()) {
-		if (!manual) return
-		log.info "Manual refresh overriding polling blackout window"
-	}
+	if (isInBlackoutWindow()) return
 
 	if (logsEnabled) log.debug("Obtaining device state")
-
+		
 	sendCommandToDevice([queryDynamicShadowData: 1])
-
+	
 }
 
 void createChildDevices() {
 // create child light and fan devices if enabled
-
+	
 	String thisId = device.id
-
+   
 	def lightChild = getChildDevice("${thisId}-light")
 	def fanChild = getChildDevice("${thisId}-fan")
-
+   
 	if (!lightChild && enabledLight) {
-
+	   
 		lightChild = addChildDevice("hubitat", "Generic Component Dimmer", "${thisId}-light", [name: "${device.displayName} Light", isComponent: false])
-
+	  
 	}
-
+   
 	if (!fanChild && enabledFan) {
-
+	   
 		fanChild = addChildDevice("hubitat", "Generic Component Fan Control", "${thisId}-fan", [name: "${device.displayName} Fan", isComponent: false])
-
+	  
 	}
 
 	// Delete child devices if their feature has been disabled
@@ -632,69 +473,73 @@ void createChildDevices() {
 	if (fanChild && !enabledFan) {
 		deleteChildDevice(fanChild.deviceNetworkId)
 	}
-
+	
 }
 
 // component device commands
 
 void componentOn(cd) {
 // turn on child device
-
+	
 	if (logsEnabled) log.debug "componentOn(${cd})"
-
+	
 	if (cd.deviceNetworkId.endsWith("-light")) {
 
 		if (!enabledLight) return
 
 		def lightChild = getChildDevice("${device.id}-light")
 		int brightness = (lightChild?.currentValue("presetLevel") ?: lightChild?.currentValue("level") ?: 100) as int
-
-		queueCommand(["lightOn": true, "lightBrightness": brightness])
-
+		
+		sendCommandToDevice(["lightOn": true, "lightBrightness": brightness])
+		pauseExecution(250)
+		
 	} else if (cd.deviceNetworkId.endsWith("-fan")) {
 
 		if (!enabledFan) return
 
-		queueCommand(["fanOn": true])
+		sendCommandToDevice(["fanOn": true])
+		pauseExecution(250)
 
 	} else {
-
+		
 		log.error "Unknown child device: ${cd}"
-
+	
 	}
 
 }
 
 void componentOff(cd) {
 // turn off child device
-
+	
 	if (logsEnabled) log.debug "componentOff(${cd})"
-
+	
 	if (cd.deviceNetworkId.endsWith("-light")) {
-
+		
 		if (!enabledLight) return
 
-		queueCommand(["lightOn": false])
-
+		sendCommandToDevice(["lightOn": false])
+		pauseExecution(250)
+		
 	} else if (cd.deviceNetworkId.endsWith("-fan")) {
-
+		
 		if (!enabledFan) return
 
-		queueCommand(["fanOn": false])
+		sendCommandToDevice(["fanOn": false])
+		pauseExecution(250)
 
 	} else {
-
+		
 		log.error "Unknown child device: ${cd}"
-
+	
 	}
 
 }
 
 void componentCycleSpeed(cd) {
 // cycle fan speed of child device
-
+	
 	if (logsEnabled) log.debug "componentCycleSpeed($cd)"
-
+	
 	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
 
 	def fanChild = getChildDevice("${device.id}-fan")
@@ -726,8 +571,9 @@ void componentCycleSpeed(cd) {
 			newFanSpeed = defaultLow
 			break
 	}
-
-	queueCommand(["fanOn": true, "fanSpeed": newFanSpeed])
+		
+	sendCommandToDevice(["fanOn": true, "fanSpeed": newFanSpeed])
+	pauseExecution(250)
 
 }
 
@@ -735,42 +581,43 @@ void componentSetSpeed(cd, value) {
 // set fan speed of child device
 
 	if (logsEnabled) log.debug("componentSetSpeed(${cd}, ${value})")
-
+	
 	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
 
 	if (value == "off") {
-
+		
 		componentOff(cd)
-
+	
 	} else if (value == "on") {
 
 		componentOn(cd)
-
+		
 	} else {
 
-		int speedValue = convertFanSpeedToNumber(value as String)
+		int speedValue = convertFanSpeedToNumber(value)
 
 		if (logsEnabled) log.debug("changing fan speed to ${speedValue}")
 
 		if (fanOnWithSetSpeed) {
-
-			queueCommand(["fanOn": true, "fanSpeed": speedValue])
+		
+			sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue])
 
 		} else {
 
-			queueCommand(["fanSpeed": speedValue])
+			sendCommandToDevice(["fanSpeed": speedValue])
 
 		}
+		pauseExecution(250)
 
 	}
-
+	
 }
 
 void componentSetLevel(cd, level, transitionTime = null) {
-// set light level or fan speed percentage
+// set light level or fan dimmer level
 
 	if (logsEnabled) log.debug("componentSetLevel(${cd}, ${level}, ${transitionTime})")
-
+	
 	int targetLevel = (level != null) ? (level as int) : 0
 
 	if (cd.deviceNetworkId.endsWith("-light")) {
@@ -778,21 +625,22 @@ void componentSetLevel(cd, level, transitionTime = null) {
 		if (!enabledLight) return
 
 		if (targetLevel <= 0) {
-
+			
 			componentOff(cd)
-
+			
 		} else {
 
 			if (lightOnWithSetLevel) {
-
-				queueCommand(["lightOn": true, "lightBrightness": targetLevel])
+			
+				sendCommandToDevice(["lightOn": true, "lightBrightness": targetLevel])
 
 			} else {
-
-				queueCommand(["lightBrightness": targetLevel])
+			
+				sendCommandToDevice(["lightBrightness": targetLevel])
 
 			}
-
+			pauseExecution(250)
+		
 		}
 
 	} else if (cd.deviceNetworkId.endsWith("-fan")) {
@@ -805,195 +653,120 @@ void componentSetLevel(cd, level, transitionTime = null) {
 
 		} else {
 
-			// this is the path Siri and Alexa use for numeric speed commands
-			int speedValue = levelToSpeed(targetLevel)
-
-			if (logsEnabled) log.debug("level ${targetLevel}% maps to fan speed ${speedValue}")
-
+			int speedValue = Math.min(6, Math.max(1, Math.round((targetLevel as float) / 100 * 6)))
 			if (fanOnWithSetSpeed) {
-				queueCommand(["fanOn": true, "fanSpeed": speedValue])
+				sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue])
 			} else {
-				queueCommand(["fanSpeed": speedValue])
+				sendCommandToDevice(["fanSpeed": speedValue])
 			}
+			pauseExecution(250)
 
 		}
 
 	}
+	
+}
+
+void componentChangeDirection(cd) {
+// change fan direction on child device
+
+	if (logsEnabled) log.debug "componentChangeDirection(${cd})"
+	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
+	def fanChild = getChildDevice("${device.id}-fan")
+	String currentDirection = fanChild?.currentValue("direction")
+	if (!currentDirection) {
+		log.warn "Current fan direction unknown, defaulting to forward"
+		currentDirection = "reverse"
+	}
+	String newDirection = (currentDirection == "forward") ? "reverse" : "forward"
+	sendCommandToDevice(["fanDirection": newDirection])
+	pauseExecution(250)
 
 }
 
-// componentChangeDirection and componentSetDirection removed in v10.
-// See the note above convertFanSpeedToEnumerated: writing fanDirection drops the fan
-// off wifi. Do not re-add.
+void componentSetDirection(cd, String direction) {
+// set discrete fan direction on child device
+
+	if (logsEnabled) log.debug "componentSetDirection(${cd}, ${direction})"
+	if (!enabledFan || !cd.deviceNetworkId.endsWith("-fan")) return
+
+	String target = direction?.toLowerCase() ?: ""
+	if (target.contains("forward") || target.contains("clockwise")) {
+		sendCommandToDevice(["fanDirection": "forward"])
+		pauseExecution(250)
+	} else if (target.contains("reverse") || target.contains("counter")) {
+		sendCommandToDevice(["fanDirection": "reverse"])
+		pauseExecution(250)
+	} else {
+		log.warn "Unsupported direction value: ${direction}"
+	}
+
+}
 
 void componentRefresh(cd) {
-// refresh device; treated as a manual refresh so it overrides the blackout window
-
+// refresh device
+	
 	if (logsEnabled) log.debug("componentRefresh(${cd})")
-
-	fetchDeviceState(true)
-
-}
-
-void sendChildEvent(cd, String name, value, String descriptionText, String unit = null) {
-// send a child event only when the value has actually changed
-//
-// gated on parent state rather than cd.currentValue(name).  currentValue does not
-// reliably round-trip the child's custom attributes (direction, lastRunningSpeed) back
-// to the parent, so comparing against it let every poll through and the event log kept
-// filling.  comparing against what we last sent is deterministic.
-//
-// setupDevice() clears these keys, so saving preferences forces a full re-sync if the
-// child and the parent's record ever drift apart.
-
-	if (!cd || !name) return
-
-	String key = "sent_${cd.deviceNetworkId}_${name}"
-	String incoming = (value == null) ? "" : value.toString()
-	String previous = (state[key] == null) ? null : state[key].toString()
-
-	if (logsEnabled) {
-
-		def childValue = null
-		try {
-			childValue = cd.currentValue(name)
-		} catch (Exception e) {
-			childValue = "<unreadable: ${e.message}>"
-		}
-
-		// getClass() is blocked by the Hubitat sandbox, so report the type with instanceof
-		String childType = (childValue == null) ? "null" :
-			(childValue instanceof String) ? "String" :
-			(childValue instanceof Integer) ? "Integer" :
-			(childValue instanceof BigDecimal) ? "BigDecimal" :
-			(childValue instanceof Number) ? "Number" : "other"
-
-		log.debug "sendChildEvent(${name}): incoming='${incoming}' lastSent='${previous}' childCurrentValue='${childValue}' (${childType})"
-
-	}
-
-	if (previous == incoming) return
-
-	state[key] = incoming
-
-	Map evt = [name: name, value: value, descriptionText: descriptionText]
-	if (unit) evt.unit = unit
-
-	cd.sendEvent(evt)
-
-}
-
-void clearSentEventCache() {
-// forget what we last sent, so the next state update re-syncs every attribute
-
-	// collect first, then remove; avoids mutating state while iterating it
-	List toRemove = []
-
-	state.each { k, v ->
-		if (k != null && k.toString().startsWith("sent_")) toRemove.add(k)
-	}
-
-	toRemove.each { state.remove(it) }
-
+		
+	fetchDeviceState()
+	
 }
 
 void sendEventsForNewState(newState) {
 // set child device states
-//
-// every block is guarded on containsKey.  a partial response (the reboot POST, or a
-// truncated reply) used to read as fanOn/lightOn == null == false and report the fan
-// and light as off.
-
-	if (!(newState instanceof Map)) return
+	
+	if (!newState) return
 
 	if (enabledFan) {
-
+		
 		def fanChild = getChildDevice("${device.id}-fan")
 		if (fanChild) {
 
-			// read-only. reporting direction sends nothing to the fan and is safe; the
-			// driver has no way to CHANGE it (see v10 note). this just surfaces whatever
-			// was set at the wall control or in the Modern Forms app.
-			if (newState.containsKey("fanDirection") && newState.fanDirection) {
+			String fanSpeedEnumerated = convertFanSpeedToEnumerated(newState.fanSpeed)
+			String fanNewSwitchStatus = newState.fanOn ? "on" : "off"
 
-				sendChildEvent(fanChild, "direction", newState.fanDirection, "${fanChild.displayName} direction is ${newState.fanDirection}")
+			fanChild.sendEvent(name: "lastRunningSpeed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} lastRunningSpeed was set to ${fanSpeedEnumerated}")
 
-			}
+			if (newState.fanOn) {
 
-			if (newState.containsKey("fanOn")) {
+				fanChild.sendEvent(name: "speed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
 
-				boolean fanIsOn = (newState.fanOn == true)
-				String fanNewSwitchStatus = fanIsOn ? "on" : "off"
+			} else {
 
-				sendChildEvent(fanChild, "switch", fanNewSwitchStatus, "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
-
-				if (newState.containsKey("fanSpeed")) {
-
-					String rawSpeedEnumerated = convertFanSpeedToEnumerated(newState.fanSpeed)
-					String fanSpeedEnumerated = fanIsOn ? rawSpeedEnumerated : "off"
-
-					if (fanSpeedEnumerated) {
-						sendChildEvent(fanChild, "speed", fanSpeedEnumerated, "${fanChild.displayName} fan speed was set to ${fanSpeedEnumerated}")
-					}
-
-					// lastRunningSpeed keeps the speed the fan was at even while it reads off,
-					// so it must track the raw speed rather than the switch-masked value
-					if (rawSpeedEnumerated && rawSpeedEnumerated != "off") {
-						sendChildEvent(fanChild, "lastRunningSpeed", rawSpeedEnumerated, "${fanChild.displayName} lastRunningSpeed was set to ${rawSpeedEnumerated}")
-					}
-
-					// report a percentage so HomeKit and Alexa have a live RotationSpeed to
-					// read.  without this there is no numeric channel and the assistants
-					// only accept named speeds.  0 when off, so the slider tracks the switch.
-					int rawSpeed = 0
-					try {
-						rawSpeed = (newState.fanSpeed as BigDecimal).intValue()
-					} catch (Exception e) {
-						rawSpeed = 0
-					}
-
-					int fanLevel = fanIsOn ? speedToLevel(rawSpeed) : 0
-
-					if (fanChild.hasAttribute("level")) {
-
-						sendChildEvent(fanChild, "level", fanLevel, "${fanChild.displayName} level was set to ${fanLevel}%", "%")
-
-					} else if (logsEnabled) {
-
-						log.debug "Fan child does not declare a level attribute; skipping percentage report"
-
-					}
-
-				}
+				fanChild.sendEvent(name: "speed", value: "off", descriptionText: "${fanChild.displayName} fan speed was set to off due to fan being off")
 
 			}
+
+			fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
+			fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
 
 		}
-
+		
 	}
-
+	
 	if (enabledLight) {
-
+		
 		def lightChild = getChildDevice("${device.id}-light")
 		if (lightChild) {
 
-			if (newState.containsKey("lightOn")) {
-
-				String lightNewSwitchStatus = (newState.lightOn == true) ? "on" : "off"
-
-				sendChildEvent(lightChild, "switch", lightNewSwitchStatus, "${lightChild.displayName} was turned ${lightNewSwitchStatus}")
-
+			String lightNewSwitchStatus = newState.lightOn ? "on" : "off"
+			
+			if (lightChild.currentValue("switch") != lightNewSwitchStatus) {
+				
+				lightChild.sendEvent(name: "switch", value: lightNewSwitchStatus, descriptionText: "${lightChild.displayName} was turned ${lightNewSwitchStatus}")
+				
 			}
-
-			if (newState.containsKey("lightBrightness") && newState.lightBrightness != null) {
-
-				sendChildEvent(lightChild, "level", newState.lightBrightness, "${lightChild.displayName} level was set to ${newState.lightBrightness}%", "%")
-				sendChildEvent(lightChild, "presetLevel", newState.lightBrightness, "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", "%")
+			
+			if (lightChild.currentValue("level") != newState.lightBrightness) {
+				
+				lightChild.sendEvent(name: "level", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} level was set to ${newState.lightBrightness}%", unit: "%")
+				lightChild.sendEvent(name: "presetLevel", value: newState.lightBrightness, descriptionText: "${lightChild.displayName} presetLevel was set to ${newState.lightBrightness}%", unit: "%")
 
 			}
 
 		}
-
+		
 	}
-
+	
 }
