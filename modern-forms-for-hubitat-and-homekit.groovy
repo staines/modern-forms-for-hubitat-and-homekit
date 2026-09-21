@@ -13,32 +13,14 @@
  *	on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *	for the specific language governing permissions and limitations under the License.
  * 
- *	Changelog:
- *		2026-09-20v02 - Add a "reportFanLevel" preference, default OFF, that echoes fan speed to the
- *		                fan child's level attribute via speedToLevel().
- *						speedToLevel is the exact inverse of levelToSpeed, so speeds 4
- *		                and 5 now report as 67 and 84 rather than colliding.
- *		                Add request accounting: count every dispatch and log the total once per
- *		                24h window, noting whether level reporting was on. Kept in state, not as
- *		                an attribute, so it generates no Hubitat events.
- *		2026-09-20v01 - Add a 15s floor between state fetches, stamped at dispatch on every
- *		                request.
- *						Catches back-to-back refreshes of both children, which used to
- *		                send two POSTs for identical data.
- *		                Guard sendEventsForNewState on containsKey. A partial response (the
- *		                reboot POST) read as fanOn/lightOn == null == false and reported the fan
- *		                and light as off.
- *		                Gate child events on what the parent last sent, in parent state rather
- *		                than cd.currentValue(), which does not reliably round-trip the child's
- *		                custom attributes. Stops lastRunningSpeed and direction writing an event
- *		                on every poll (~576 rows/day at 5m). Event-only; no request effect.
- *		                Fix lastRunningSpeed to track the raw speed rather than the switch-masked
- *		                value, so it survives the fan reading off.
- *		                Log fan communication errors at warn unconditionally; with debug off an
- *		                unreachable fan was completely silent.
- *		                Replace the uneven inline level->speed math in componentSetLevel with even
- *		                ~17-point buckets. The old version gave speed 1 a 24-point range and speed
- *		                6 only 9.
+ *		2026-09-20v02 - Add optional fan level reporting to keep Level in sync with fanSpeed.
+ *		                Add daily request counting to measure outbound calls to the fan.
+ *		2026-09-20v01 - Remove fan direction control; writing fanDirection drops the fan off wifi.
+ *		                Add 15s floor between state fetches to drop redundant reads.
+ *		                Gate child events on last-sent value; fix lastRunningSpeed to track raw speed.
+ *		                Guard state parsing on containsKey so partial responses no longer report off.
+ *		                Log fan communication errors unconditionally.
+ *		                Even out the level-to-speed mapping in componentSetLevel.
  *		2026-09-03v06 - Add blackout window check inside setupDevice() to prevent state fetches on hub reboot.
  *		                Safely parse settings.fanSpeedLow using null-safe check to prevent cast errors on install.
  *		                Harden componentSetLevel against 0% light race conditions.
