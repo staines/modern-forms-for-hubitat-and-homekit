@@ -13,6 +13,8 @@
  *	on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *	for the specific language governing permissions and limitations under the License.
  * 
+ *	Changelog:
+ *
  *		2026-09-20v02 - Add optional fan level reporting to keep Level in sync with fanSpeed.
  *		                Add daily request counting to measure outbound calls to the fan.
  *		2026-09-20v01 - Remove fan direction control; writing fanDirection drops the fan off wifi.
