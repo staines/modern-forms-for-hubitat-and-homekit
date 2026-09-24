@@ -14,6 +14,8 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2026-09-23v02 - Stop direction and lastRunningSpeed from writing an event on every poll.
+ *		                Remove leftover state variables from 2026-09-20v02.
  *		2026-09-23v01 - Report fan Level from fanSpeed so the fan % always matches the speed sent to the fan.
  *		                Add rolling 24-hour count of requests sent to the fan in device state.
  *		2026-09-03v06 - Add blackout window check inside setupDevice() to prevent state fetches on hub reboot.
@@ -161,6 +163,9 @@ metadata {
 // driver code save.
 @groovy.transform.Field static java.util.concurrent.ConcurrentHashMap requestCounters = new java.util.concurrent.ConcurrentHashMap()
 
+// last value sent for direction and lastRunningSpeed only; see sendEventIfChanged()
+@groovy.transform.Field static java.util.concurrent.ConcurrentHashMap lastSentValues = new java.util.concurrent.ConcurrentHashMap()
+
 // capabilities
 
 void installed() {
@@ -216,6 +221,8 @@ void setupDevice() {
 	if (logsEnabled) log.debug("setupDevice()")
 
 	unschedule()
+
+	removeVestigialState()
 		
 	try {
 		
@@ -818,6 +825,48 @@ void componentRefresh(cd) {
 	
 }
 
+void sendEventIfChanged(cd, String name, value, String descriptionText) {
+// send an event only when the value differs from the last one this driver sent
+//
+// used ONLY for direction and lastRunningSpeed. they are custom attributes on the fan
+// child, so Hubitat's duplicate filter doesn't suppress them the way it does switch, speed
+// and level, and they wrote an event on every poll.
+//
+// the record is held in memory, never in `state`: the 2026-09-20v02 `state`-based gate
+// is the prime suspect for its light-Off failure. memory clears on hub reboot or driver
+// save, which just means the next poll sends each value once. standard attributes must
+// never go through this.
+
+	if (value == null) return
+
+	String key = "${device.id}-${cd.deviceNetworkId}-${name}"
+	String incoming = value.toString()
+
+	if (lastSentValues.get(key) == incoming) return
+
+	cd.sendEvent(name: name, value: value, descriptionText: descriptionText)
+	lastSentValues.put(key, incoming)
+
+}
+
+void removeVestigialState() {
+// remove state left behind by 2026-09-20v02 and the reverted iterations before it on
+// 2026-09-20. Hubitat keeps a device's state across driver code changes, so these would
+// otherwise sit on the device page indefinitely.
+
+	List stale = []
+
+	state.each { k, v ->
+		String key = k?.toString()
+		if (key in ["requestCount", "requestCountSince", "lastRequestMs", "fanDirection", "pendingCommand"] || key?.startsWith("sent_")) stale.add(k)
+	}
+
+	stale.each { state.remove(it) }
+
+	if (stale && logsEnabled) log.debug "Removed leftover state: ${stale}"
+
+}
+
 void sendEventsForNewState(newState) {
 // set child device states
 	
@@ -831,7 +880,7 @@ void sendEventsForNewState(newState) {
 			String fanSpeedEnumerated = convertFanSpeedToEnumerated(newState.fanSpeed)
 			String fanNewSwitchStatus = newState.fanOn ? "on" : "off"
 
-			fanChild.sendEvent(name: "lastRunningSpeed", value: fanSpeedEnumerated, descriptionText: "${fanChild.displayName} lastRunningSpeed was set to ${fanSpeedEnumerated}")
+			sendEventIfChanged(fanChild, "lastRunningSpeed", fanSpeedEnumerated, "${fanChild.displayName} lastRunningSpeed was set to ${fanSpeedEnumerated}")
 
 			if (newState.fanOn) {
 
@@ -864,7 +913,7 @@ void sendEventsForNewState(newState) {
 				fanChild.sendEvent(name: "level", value: fanLevel, unit: "%", descriptionText: "${fanChild.displayName} level was set to ${fanLevel}%")
 
 			}
-			fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
+			sendEventIfChanged(fanChild, "direction", newState.fanDirection, "${fanChild.displayName} direction was set to ${newState.fanDirection}")
 
 		}
 		
