@@ -14,6 +14,8 @@
  *	for the specific language governing permissions and limitations under the License.
  * 
  *	Changelog:
+ *		2026-09-23v01 - Report fan Level from fanSpeed so the fan % always matches the speed sent to the fan.
+ *		                Add rolling 24-hour count of requests sent to the fan in device state.
  *		2026-09-03v06 - Add blackout window check inside setupDevice() to prevent state fetches on hub reboot.
  *		                Safely parse settings.fanSpeedLow using null-safe check to prevent cast errors on install.
  *		                Harden componentSetLevel against 0% light race conditions.
@@ -149,6 +151,15 @@ metadata {
 	}
 	
 }
+
+// request counter
+//
+// held in memory rather than read-modify-written through `state`. a command's execution
+// and its async callback can overlap, and overlapping executions can overwrite each
+// other's `state` saves, which made the 2026-09-20v02 counter read low. `state` is only
+// written to, as a display copy and as a backup so the count survives a hub reboot or a
+// driver code save.
+@groovy.transform.Field static java.util.concurrent.ConcurrentHashMap requestCounters = new java.util.concurrent.ConcurrentHashMap()
 
 // capabilities
 
@@ -391,6 +402,36 @@ int convertFanSpeedToNumber(String fanSpeedEnumeratedValue) {
 	
 }
 
+int levelToSpeed(int level) {
+// convert a fan Level (%) to a Modern Forms fan speed (1-6), in even ~17-point buckets
+//
+// the exact inverse of speedToLevel, so speed -> level -> speed never drifts.
+// fanSpeedLow does not apply here: a percentage can address all 6 speeds directly.
+
+	if (level <= 17) return 1
+	if (level <= 33) return 2
+	if (level <= 50) return 3
+	if (level <= 67) return 4
+	if (level <= 84) return 5
+	return 6
+
+}
+
+int speedToLevel(int fanSpeedNumber) {
+// convert a Modern Forms fan speed (1-6) to the fan Level (%) reported to Hubitat and HomeKit
+
+	switch (fanSpeedNumber) {
+		case 1: return 17
+		case 2: return 33
+		case 3: return 50
+		case 4: return 67
+		case 5: return 84
+		case 6: return 100
+		default: return 0
+	}
+
+}
+
 void sendCommandToDevice(Map jsonBodyMap) {
 // build and send asynchronous command to device
 	
@@ -412,8 +453,70 @@ void sendCommandToDevice(Map jsonBodyMap) {
 		asynchttpPost("asyncHttpCallback", params, [body: jsonBodyMap])
 	} catch (Exception e) {
 		log.error "Error dispatching async HTTP request: ${e}"
+		return
 	}
-	
+
+	// counted only after a successful dispatch, and isolated so that a fault in the
+	// counter can never interfere with sending a command
+	try {
+		countRequest()
+	} catch (Exception e) {
+		if (logsEnabled) log.debug "Request counter error: ${e}"
+	}
+
+}
+
+void countRequest() {
+// add one request to a rolling 24-hour count kept in 24 hourly buckets
+//
+// state.requestCount24h is the number shown on the device page. it covers the current
+// partial hour plus the 23 before it, so it is accurate to within an hour.
+
+	String key = device.id.toString()
+	long hour = (long) (now() / 3600000L)
+
+	Map counter = requestCounters.get(key) as Map
+
+	if (counter == null) {
+
+		// first request since a hub reboot or driver save: resume from the backup in state
+		List saved = (state.requestBuckets instanceof List) ? (state.requestBuckets as List) : null
+		List buckets = (saved != null && saved.size() == 24) ? saved.collect { (it ?: 0) as int } : ([0] * 24)
+		long savedHour = (state.requestBucketHour != null) ? (state.requestBucketHour as long) : hour
+
+		counter = [hour: savedHour, buckets: buckets]
+
+	}
+
+	List buckets = counter.buckets as List
+	long lastHour = counter.hour as long
+
+	if (hour > lastHour) {
+
+		// clear the buckets for every hour that has passed since the last request, up to all 24
+		long gap = Math.min(24L, hour - lastHour)
+
+		for (long h = lastHour + 1; h <= lastHour + gap; h++) {
+			buckets[(int) (h % 24)] = 0
+		}
+
+		counter.hour = hour
+
+	}
+
+	int index = (int) (hour % 24)
+	buckets[index] = (buckets[index] as int) + 1
+
+	counter.buckets = buckets
+	requestCounters.put(key, counter)
+
+	int total = 0
+	buckets.each { total += (it as int) }
+
+	state.requestCount24h = total
+	state.requestBuckets = buckets
+	state.requestBucketHour = counter.hour
+
 }
 
 void asyncHttpCallback(response, data) {
@@ -653,7 +756,9 @@ void componentSetLevel(cd, level, transitionTime = null) {
 
 		} else {
 
-			int speedValue = Math.min(6, Math.max(1, Math.round((targetLevel as float) / 100 * 6)))
+			// the Level reported back from the fan's response is speedToLevel(speedValue),
+			// so the % snaps to match the speed actually sent (e.g. 60% -> speed 4 -> 67%)
+			int speedValue = levelToSpeed(targetLevel)
 			if (fanOnWithSetSpeed) {
 				sendCommandToDevice(["fanOn": true, "fanSpeed": speedValue])
 			} else {
@@ -739,6 +844,26 @@ void sendEventsForNewState(newState) {
 			}
 
 			fanChild.sendEvent(name: "switch", value: fanNewSwitchStatus, descriptionText: "${fanChild.displayName} was turned ${fanNewSwitchStatus}")
+
+			// fan Level follows the speed the fan reports, whichever path set it: HomeKit %,
+			// a named speed in Hubitat, cycleSpeed, or the remote/app picked up by a poll.
+			// 0 when the fan is off. sent straight to sendEvent like switch and speed above;
+			// Hubitat already drops unchanged events for standard attributes such as level.
+			if (newState.containsKey("fanOn") && newState.containsKey("fanSpeed")) {
+
+				int rawSpeed = 0
+
+				try {
+					rawSpeed = (newState.fanSpeed as BigDecimal).intValue()
+				} catch (Exception e) {
+					rawSpeed = 0
+				}
+
+				int fanLevel = newState.fanOn ? speedToLevel(rawSpeed) : 0
+
+				fanChild.sendEvent(name: "level", value: fanLevel, unit: "%", descriptionText: "${fanChild.displayName} level was set to ${fanLevel}%")
+
+			}
 			fanChild.sendEvent(name: "direction", value: newState.fanDirection, descriptionText: "${fanChild.displayName} direction was set to ${newState.fanDirection}")
 
 		}
