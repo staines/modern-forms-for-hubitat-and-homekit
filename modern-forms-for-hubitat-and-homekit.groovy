@@ -3,7 +3,7 @@
  *
  *	Copyright 2026 Chris Staines
  *
- *  Thank you to Robert Morris, Ben Hamilton, 1info, and Hubitat for inspiration and prior solutions.
+ *	Thank you to Robert Morris, Ben Hamilton, 1info, and Hubitat for inspiration and prior solutions.
  *
  *	Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *	in compliance with the License. You may obtain a copy of the License at:
@@ -15,7 +15,9 @@
  *	for the specific language governing permissions and limitations under the License.
  *
  *	Changelog:
- *		2026-11-13v01 - Rewritten from scratch using Fable 5.2.
+ *		2026-11-13v02 - Shorten the request timeout to 5 seconds.
+ *		                Retry a command once if the fan does not answer it.
+ *		2026-11-13v01 - Rewrite from scratch.
  */
 
 /*
@@ -30,7 +32,7 @@
  *		Writable keys used here: fanOn, fanSpeed (1-6), lightOn, lightBrightness (1-100).
  *
  *		NEVER send "fanDirection". On the Mykonos 5 it makes the fan drop off wifi every time,
- *		whatever value is sent. Reverse the fan with the wall control, remote, or Modern Forms app.
+ *		whatever value is sent. Reverse the fan with the wall control, remote or Modern Forms app.
  *
  *		The fan's web server has very little memory, so this driver:
  *			- never has more than one request in flight (see "request pipeline" below)
@@ -45,11 +47,11 @@
 import groovy.transform.Field
 import java.util.concurrent.ConcurrentHashMap
 
-@Field static final String DRIVER_VERSION = "2026-11-13v01"
+@Field static final String DRIVER_VERSION = "2026-11-13v02"
 
 @Field static final List<String> SPEED_NAMES = ["low", "medium-low", "medium", "medium-high", "high"]
 
-@Field static final int HTTP_TIMEOUT_SECONDS = 10
+@Field static final int HTTP_TIMEOUT_SECONDS = 5
 @Field static final long STALE_REQUEST_MS = 20000L	// a request with no callback after this long is treated as lost
 @Field static final int PACING_MS = 300				// gap between one reply and the next request
 
@@ -64,6 +66,7 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final ConcurrentHashMap pendingCommands = new ConcurrentHashMap()	// id -> map of keys waiting to be sent
 @Field static final ConcurrentHashMap requestCounters = new ConcurrentHashMap()	// id -> hourly request buckets
 @Field static final ConcurrentHashMap unreachable = new ConcurrentHashMap()		// id -> true while the fan is not answering
+@Field static final ConcurrentHashMap retryWaiting = new ConcurrentHashMap()		// id -> true when the waiting commands include a retry
 
 metadata {
 
@@ -133,10 +136,9 @@ void setup() {
 	unschedule()
 
 	// state written by an earlier driver version is not carried forward
-	if (state.driverVersion != DRIVER_VERSION) {
-		state.clear()
-		state.driverVersion = DRIVER_VERSION
-	}
+	if (state.driverVersion == null) state.clear()
+
+	state.driverVersion = DRIVER_VERSION
 
 	syncChildDevices()
 	schedulePolling()
@@ -445,7 +447,7 @@ void poll() {
 	if (!pending().isEmpty()) return
 	if (!claimRequestSlot()) return
 
-	send([queryDynamicShadowData: 1])
+	send([queryDynamicShadowData: 1], false)
 
 }
 
@@ -526,6 +528,7 @@ void sendPending() {
 
 	if (inBlackout()) {
 		waiting.clear()
+		retryWaiting.remove(deviceKey())
 		return
 	}
 
@@ -543,11 +546,12 @@ void sendPending() {
 		return
 	}
 
-	send(body)
+	// a request that carries a retry is marked, so that it is never retried again
+	send(body, retryWaiting.remove(deviceKey()) != null)
 
 }
 
-void send(Map body) {
+void send(Map body, boolean isRetry) {
 // the only place a request to the fan is made. the caller must hold the request slot.
 
 	Map params = [
@@ -562,7 +566,7 @@ void send(Map body) {
 
 		logDebug "sending ${body}"
 
-		asynchttpPost("handleResponse", params, [body: body])
+		asynchttpPost("handleResponse", params, [body: body, isRetry: isRetry])
 
 	} catch (Exception e) {
 
@@ -591,6 +595,8 @@ void handleResponse(response, data) {
 				log.warn "${device.displayName}: fan is not answering (${response.getErrorMessage()})"
 			}
 
+			retryOnce(data)
+
 		} else {
 
 			if (unreachable.remove(deviceKey()) != null) {
@@ -617,6 +623,39 @@ void handleResponse(response, data) {
 		if (!pending().isEmpty()) runInMillis(PACING_MS, "sendPending")
 
 	}
+
+}
+
+void retryOnce(data) {
+// put an unanswered command back in line, one time only
+//
+// this cannot loop or pile up:
+//   - status polls are never retried
+//   - a request that already carried a retry is never retried again, so one failed command
+//     causes at most one extra request
+//   - a key that a newer command has set since is left alone, so the newer command wins
+//   - the retry goes through the same one-at-a-time pipeline as everything else
+
+	Map body = (data?.body instanceof Map) ? (data.body as Map) : null
+
+	if (body == null || body.containsKey("queryDynamicShadowData")) return
+
+	if (data?.isRetry == true) {
+		log.warn "${device.displayName}: command ${body} was not answered twice and has been dropped"
+		return
+	}
+
+	if (inBlackout()) return
+
+	ConcurrentHashMap waiting = pending()
+
+	body.each { key, value ->
+		if (value != null) waiting.putIfAbsent(key, value)
+	}
+
+	retryWaiting.put(deviceKey(), true)
+
+	logDebug "command ${body} was not answered; it will be sent once more"
 
 }
 
